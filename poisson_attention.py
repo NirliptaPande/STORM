@@ -10,61 +10,99 @@ def compute_centroid(attn: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     attn: (16, 16), assumed to sum to 1
     """
     h, w = attn.shape
-    xs = torch.arange(w, device=attn.device, dtype=torch.float32)  # column indices
-    ys = torch.arange(h, device=attn.device, dtype=torch.float32)  # row indices
-    cx = (attn.sum(dim=0) * xs).sum()  # x centroid (column)
-    cy = (attn.sum(dim=1) * ys).sum()  # y centroid (row)
+    xs = torch.arange(w, device=attn.device, dtype=torch.float32)
+    ys = torch.arange(h, device=attn.device, dtype=torch.float32)
+    cx = (attn.sum(dim=0) * xs).sum()
+    cy = (attn.sum(dim=1) * ys).sum()
     return cx, cy
 
 
-def compute_gradient(attn: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def compute_storm_cost_matrix(
+    A_src: torch.Tensor,
+    A_ref: torch.Tensor,
+    direction: str,
+    w: float = 1.0,
+    eps: float = 1e-8,
+) -> torch.Tensor:
     """
-    Compute spatial gradient of attention map via central differences.
-    Edges handled with one-sided differences.
-    attn: (16, 16)
-    Returns grad_x, grad_y each (16, 16)
+    Compute STORM's ST Cost matrix on the 16x16 grid.
+    Directly mirrors _compute_cost_function in pipeline.py.
+
+    C_ij = A_ref_ij * delta_ij(desired, restricted)
+
+    where delta encodes:
+    - low cost on the desired side of the reference centroid
+    - high cost on the restricted side
+
+    Args:
+        A_src:     (16, 16) source attention, normalized
+        A_ref:     (16, 16) reference attention, normalized
+        direction: one of 'left', 'right', 'above', 'below'
+        w:         progressive weight (STORM's omega), controls asymmetry strength
+        eps:       numerical stability
+
+    Returns:
+        C: (16, 16) scalar cost field
     """
-    # grad_x: gradient along columns (x direction)
-    grad_x = torch.zeros_like(attn)
-    grad_x[:, 1:-1] = (attn[:, 2:] - attn[:, :-2]) / 2.0   # central diff
-    grad_x[:, 0]    = attn[:, 1] - attn[:, 0]                # forward diff
-    grad_x[:, -1]   = attn[:, -1] - attn[:, -2]              # backward diff
+    device = A_src.device
+    h, w_grid = A_src.shape  # 16, 16
 
-    # grad_y: gradient along rows (y direction)
-    grad_y = torch.zeros_like(attn)
-    grad_y[1:-1, :] = (attn[2:, :] - attn[:-2, :]) / 2.0
-    grad_y[0, :]    = attn[1, :] - attn[0, :]
-    grad_y[-1, :]   = attn[-1, :] - attn[-2, :]
+    cx_ref, cy_ref = compute_centroid(A_ref)
 
-    return grad_x, grad_y
+    # coordinate grids
+    xs = torch.arange(w_grid, device=device, dtype=torch.float32).unsqueeze(0)  # (1, 16)
+    ys = torch.arange(h,      device=device, dtype=torch.float32).unsqueeze(1)  # (16, 1)
 
+    # directional delta values — distances from each point to reference centroid
+    # delta_des: positive when on the desired side → low cost
+    # delta_res: positive when on the restricted side → high cost
+    if direction == 'left':
+        delta_des = cx_ref - xs   # positive when left of ref centroid ✓
+        delta_res = xs - cx_ref   # positive when right of ref centroid ✗
+        delta_des = delta_des.expand(h, -1)
+        delta_res = delta_res.expand(h, -1)
+    elif direction == 'right':
+        delta_des = xs - cx_ref
+        delta_res = cx_ref - xs
+        delta_des = delta_des.expand(h, -1)
+        delta_res = delta_res.expand(h, -1)
+    elif direction == 'above':
+        delta_des = cy_ref - ys   # positive when above ref centroid ✓
+        delta_res = ys - cy_ref
+        delta_des = delta_des.expand(-1, w_grid)
+        delta_res = delta_res.expand(-1, w_grid)
+    elif direction == 'below':
+        delta_des = ys - cy_ref
+        delta_res = cy_ref - ys
+        delta_des = delta_des.expand(-1, w_grid)
+        delta_res = delta_res.expand(-1, w_grid)
+    else:
+        # no spatial relationship — uniform cost, just prevent overlap
+        return A_ref
 
-def compute_divergence(vx: torch.Tensor, vy: torch.Tensor) -> torch.Tensor:
-    """
-    Compute divergence of vector field (vx, vy) via central differences.
-    vx, vy: (16, 16)
-    Returns div: (16, 16)
-    """
-    # d(vx)/dx
-    dvx_dx = torch.zeros_like(vx)
-    dvx_dx[:, 1:-1] = (vx[:, 2:] - vx[:, :-2]) / 2.0
-    dvx_dx[:, 0]    = vx[:, 1] - vx[:, 0]
-    dvx_dx[:, -1]   = vx[:, -1] - vx[:, -2]
+    # indicator: only apply when positive (on that side of centroid)
+    ind_des = (delta_des > 0).float()
+    ind_res = (delta_res > 0).float()
 
-    # d(vy)/dy
-    dvy_dy = torch.zeros_like(vy)
-    dvy_dy[1:-1, :] = (vy[2:, :] - vy[:-2, :]) / 2.0
-    dvy_dy[0, :]    = vy[1, :] - vy[0, :]
-    dvy_dy[-1, :]   = vy[-1, :] - vy[-2, :]
+    # STORM's delta function (Eq. 2 in paper):
+    # 1 / (w * (delta_des + eps)) when on desired side → low cost
+    # w * (delta_res + eps)        when on restricted side → high cost
+    delta = (
+        ind_des / (w * (delta_des + eps))
+        + ind_res * w * (delta_res + eps)
+    )
 
-    return dvx_dx + dvy_dy
+    # ST Cost: weight by reference attention (non-overlap)
+    # C_ij = A_ref_ij * delta_ij  (Eq. 3 in paper)
+    C = A_ref * delta  # (16, 16)
+
+    return C
 
 
 def build_neumann_laplacian(h: int, w: int, device: torch.device) -> torch.Tensor:
     """
-    Build discrete Laplacian matrix with Neumann (zero-flux) boundary conditions.
+    Build discrete Laplacian with Neumann (zero-flux) boundary conditions.
     Size: (h*w, h*w)
-    Neumann BC: attention mass stays on grid, no flux out of boundary.
     """
     n = h * w
     L = torch.zeros(n, n, device=device)
@@ -72,128 +110,97 @@ def build_neumann_laplacian(h: int, w: int, device: torch.device) -> torch.Tenso
     for i in range(h):
         for j in range(w):
             idx = i * w + j
-            # number of valid neighbors - this is what Neumann BC changes
-            # vs Dirichlet: instead of fixing boundary values,
-            # we just don't add flux terms for missing neighbors
             neighbors = 0
-
-            if i > 0:      # up
+            if i > 0:
                 L[idx, (i-1)*w + j] = 1
                 neighbors += 1
-            if i < h-1:    # down
+            if i < h-1:
                 L[idx, (i+1)*w + j] = 1
                 neighbors += 1
-            if j > 0:      # left
+            if j > 0:
                 L[idx, i*w + (j-1)] = 1
                 neighbors += 1
-            if j < w-1:    # right
+            if j < w-1:
                 L[idx, i*w + (j+1)] = 1
                 neighbors += 1
-
-            L[idx, idx] = -neighbors  # negative sum of neighbors
+            L[idx, idx] = -neighbors
 
     return L
 
 
-def solve_poisson(b: torch.Tensor, device: torch.device) -> torch.Tensor:
+def solve_poisson(C: torch.Tensor) -> torch.Tensor:
     """
-    Solve Lf = b with Neumann BC.
-    Neumann Laplacian is singular (null space = constant functions),
-    so we fix one value to make the system uniquely solvable —
-    specifically we pin f[0,0] = A_src[0,0] to anchor the solution.
-    b: (16, 16) divergence field
-    Returns f: (16, 16)
+    Solve the Poisson equation: ∇²f = C
+    with Neumann boundary conditions.
+
+    C is STORM's cost matrix — used directly as the RHS.
+    High cost regions in C repel attention mass,
+    low cost regions attract it, exactly as in STORM's cost matrix.
+
+    Args:
+        C: (16, 16) STORM cost matrix
+
+    Returns:
+        f: (16, 16) target attention map
     """
-    h, w = b.shape
-    n = h * w
+    device = C.device
+    h, w = C.shape  # 16, 16
 
     L = build_neumann_laplacian(h, w, device)  # (256, 256)
-    b_flat = b.flatten()                        # (256,)
+    b = C.flatten()                             # (256,)
 
-    # Neumann Laplacian has a null space (adding a constant to f is also a solution)
-    # Fix this by pinning one equation: f[0] = b[0]
-    # i.e. replace first row of L with identity row
+    # Pin one value to resolve null space (Neumann BC → L is singular)
     L[0, :] = 0.0
     L[0, 0] = 1.0
-    b_flat = b_flat.clone()
-    b_flat[0] = 0.0  # anchor value — will renormalize anyway
+    b = b.clone()
+    b[0] = 0.0
 
-    # Solve the linear system
-    # lstsq handles any remaining near-singularity gracefully
-    f_flat = torch.linalg.lstsq(L, b_flat.unsqueeze(1)).solution.squeeze(1)
-
-    return f_flat.reshape(h, w)
+    f = torch.linalg.lstsq(L, b.unsqueeze(1)).solution.squeeze(1)
+    return f.reshape(h, w)
 
 
 def poisson_attention_push(
     A_src: torch.Tensor,
     A_ref: torch.Tensor,
-    direction: torch.Tensor,
+    direction: str,
+    w: float = 1.0,
 ) -> torch.Tensor:
     """
-    Replace STORM's OT-based attention repositioning with Poisson blending.
-    
-    Args:
-        A_src:     (16, 16) source attention map (e.g. 'car'), normalized
-        A_ref:     (16, 16) reference attention map (e.g. 'elephant'), normalized
-        direction: (2,) fixed unit vector from prompt, e.g. tensor([-1., 0.]) for 'left'
-    
-    Returns:
-        f: (16, 16) updated attention map, normalized
-    """
-    device = A_src.device
+    Replace STORM's OT with a single Poisson solve.
 
-    # Step 1 — normalize inputs to be safe
+    Uses STORM's cost matrix directly as the RHS of ∇²f = C,
+    producing f in one shot — no iterative Sinkhorn needed.
+
+    Args:
+        A_src:     (16, 16) source attention (e.g. 'cake'), normalized
+        A_ref:     (16, 16) reference attention (e.g. 'suitcase'), normalized
+        direction: 'left', 'right', 'above', 'below'
+        w:         STORM's progressive weight omega, passed in from timestep
+
+    Returns:
+        f: (16, 16) target attention map, normalized
+    """
+    # normalize
     A_src = A_src / (A_src.sum() + 1e-8)
     A_ref = A_ref / (A_ref.sum() + 1e-8)
 
-    # Step 2 — compute centroids and magnitude
-    cx_src, cy_src = compute_centroid(A_src)
-    cx_ref, cy_ref = compute_centroid(A_ref)
-    magnitude = torch.sqrt((cx_ref - cx_src)**2 + (cy_ref - cy_src)**2)
+    # Step 1 — STORM cost matrix as RHS
+    C = compute_storm_cost_matrix(A_src, A_ref, direction, w=w)  # (16, 16)
 
-    # Step 3 — compute gradient of source attention
-    grad_x, grad_y = compute_gradient(A_src)  # each (16, 16)
+    # Step 2 — single Poisson solve: ∇²f = C
+    f = solve_poisson(C)  # (16, 16)
 
-    # Step 4 — build guidance field v
-    # direction is (2,): direction[0] = dx, direction[1] = dy
-    dx, dy = direction[0], direction[1]
-
-    # push term: magnitude * d * A_src * (1 - A_ref)
-    # this is the spatial part — high where source is, low where reference is
-    push = magnitude * A_src * (1 - A_ref)  # (16, 16) scalar field
-
-    # full vector field v
-    vx = grad_x + dx * push  # (16, 16)
-    vy = grad_y + dy * push  # (16, 16)
-
-    # Step 5 — compute divergence of v (RHS of Poisson equation)
-    b = compute_divergence(vx, vy)  # (16, 16)
-
-    # Step 6 — solve Poisson equation: Lf = b
-    f = solve_poisson(b, device)  # (16, 16)
-
-    # Step 7 — post-process: clamp negatives, renormalize
+    # Step 3 — post-process
     f = f.clamp(min=0)
     f = f / (f.sum() + 1e-8)
 
     return f
 
 
-def get_direction_from_prompt(prompt: str) -> torch.Tensor:
-    """
-    Parse fixed direction vector from prompt.
-    Returns unit vector (2,): [dx, dy]
-    dx: positive = right, negative = left
-    dy: positive = down, negative = up (image coordinates)
-    """
-    if "left" in prompt:
-        return torch.tensor([-1., 0.])
-    elif "right" in prompt:
-        return torch.tensor([1., 0.])
-    elif "above" in prompt or "top" in prompt:
-        return torch.tensor([0., -1.])
-    elif "below" in prompt:
-        return torch.tensor([0., 1.])
-    else:
-        return torch.tensor([0., 0.])  # no spatial relationship
+def get_direction_from_prompt(prompt: str) -> str:
+    """Parse spatial direction from prompt string."""
+    if "left"  in prompt: return "left"
+    if "right" in prompt: return "right"
+    if "above" in prompt or "top" in prompt: return "above"
+    if "below" in prompt: return "below"
+    return "none"

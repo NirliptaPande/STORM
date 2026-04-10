@@ -8,6 +8,7 @@ from poisson_attention import poisson_attention_push, get_direction_from_prompt
 from utils.ptp_utils import AttentionStore, aggregate_attention
 
 
+
 class PoissonPipeline(StormPipeline):
     """
     Replaces STORM's OT-based attention repositioning with Poisson blending.
@@ -95,19 +96,22 @@ class PoissonPipeline(StormPipeline):
             A_src = self._apply_smoothing(A_src, kernel_size, sigma)
             A_ref = self._apply_smoothing(A_ref, kernel_size, sigma)
 
-        # ── 4. Get fixed direction from prompt ────────────────────────────────
-        direction = get_direction_from_prompt(prompt_str).to(device)
+        # ── 4. Get direction from prompt ──────────────────────────────────────
+        direction = get_direction_from_prompt(prompt_str)
 
-        if direction.sum() == 0:
+        if direction == "none":
             return torch.tensor(0.0, device=device), [0.0, 0.0]
 
-        # ── 5. Poisson solve — get target attention map ───────────────────────
-        f = poisson_attention_push(A_src, A_ref, direction)  # (16, 16)
+        # ── 5. Compute STORM's progressive weight w for this timestep ─────────
+        # Mirrors _exp_cost_weight in pipeline.py exactly
+        w = (1 + 99 * (1 - torch.exp(torch.tensor(-0.4 * time_step)))).item()
 
-        # ── 6. Loss: MSE between current attention and Poisson target ─────────
+        # ── 6. Poisson solve — one shot, no iteration ─────────────────────────
+        f = poisson_attention_push(A_src.detach(), A_ref.detach(), direction, w=w)  # (16, 16)
+        # ── 7. Loss: MSE between current attention and Poisson target ─────────
         loss = F.mse_loss(A_src, f)
 
-        # ── 7. Coordinate for threshold check in __call__ ─────────────────────
+        # ── 8. Coordinate for threshold check ────────────────────────────────
         xs = torch.arange(16, device=device, dtype=torch.float32)
         cx_src = (A_src.sum(dim=0) * xs).sum()
         cx_ref = (A_ref.sum(dim=0) * xs).sum()
