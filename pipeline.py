@@ -316,30 +316,73 @@ class StormPipeline(StableDiffusionPipeline):
         return 1 + (W_max - 1) * (1 - torch.exp(-k * t_values))
     
     def _compute_cost_function(self, attn: torch.Tensor, direction: str, w: float = 100) -> torch.Tensor:
-        cost_matrix = torch.zeros_like(attn, device=attn.device)
-        centroid_sub_x, centroid_sub_y = self._compute_centroid_2d(attn)
-        
         height, width = attn.shape
-        x_coords = torch.arange(width, device=attn.device).float().unsqueeze(0) # (1, W)
-        y_coords = torch.arange(height, device=attn.device).float().unsqueeze(1) # (H, 1)
-
-        if direction == 'left':
-            cost_factor = torch.where(x_coords < centroid_sub_x, 1 / (w * (centroid_sub_x - x_coords + 1e-8)), w * (x_coords - centroid_sub_x + 1e-8))
-        elif direction == 'right':
-            cost_factor = torch.where(x_coords > centroid_sub_x, 1 / (w * (x_coords - centroid_sub_x + 1e-8)), w * (centroid_sub_x - x_coords + 1e-8))
-        elif direction == 'above':
-            cost_factor = torch.where(y_coords < centroid_sub_y, 1 / (w * (centroid_sub_y - y_coords + 1e-8)), w * (y_coords - centroid_sub_y + 1e-8))
-            cost_factor = cost_factor.transpose(0, 1) # Transpose to match broadcasting with x_coords
-        elif direction == 'below':
-            cost_factor = torch.where(y_coords > centroid_sub_y, 1 / (w * (y_coords - centroid_sub_y + 1e-8)), w * (centroid_sub_y - y_coords + 1e-8))
-            cost_factor = cost_factor.transpose(0, 1) # Transpose to match broadcasting with x_coords
-        else: # For 'obj' or other directions
-            cost_factor = torch.ones_like(attn, device=attn.device)
-
-        cost_matrix = attn * cost_factor 
-        cost_matrix_flat = cost_matrix.flatten().unsqueeze(1).repeat(1, attn.numel())               
+        centroid_x, centroid_y = self._compute_centroid_2d(attn)
         
-        return cost_matrix_flat
+        # Build pixel position grid [256, 2]
+        y_coords, x_coords = torch.meshgrid(
+            torch.arange(height, device=attn.device).float(),
+            torch.arange(width, device=attn.device).float(),
+            indexing='ij'
+        )
+        # flatten to [256, 2] — each row is (x, y) of a pixel
+        positions = torch.stack([x_coords.flatten(), y_coords.flatten()], dim=1)
+        
+        # Pairwise euclidean distances between all pixel pairs [256, 256]
+        # dist_matrix[i][j] = physical distance from pixel i to pixel j
+        dist_matrix = torch.cdist(positions, positions, p=2)
+        
+        # Directional penalty at each DESTINATION pixel j [256]
+        # low penalty if j is on the desired side, high if on wrong side
+        x_flat = x_coords.flatten()
+        y_flat = y_coords.flatten()
+        
+        if direction == 'left':
+            # destination should be left of centroid
+            penalty = torch.where(
+                x_flat < centroid_x,
+                1 / (w * (centroid_x - x_flat + 1e-8)),   # low cost on left ✓
+                w * (x_flat - centroid_x + 1e-8)           # high cost on right ✗
+            )
+        elif direction == 'right':
+            penalty = torch.where(
+                x_flat > centroid_x,
+                1 / (w * (x_flat - centroid_x + 1e-8)),   # low cost on right ✓
+                w * (centroid_x - x_flat + 1e-8)           # high cost on left ✗
+            )
+        elif direction == 'above':
+            penalty = torch.where(
+                y_flat < centroid_y,
+                1 / (w * (centroid_y - y_flat + 1e-8)),   # low cost above ✓
+                w * (y_flat - centroid_y + 1e-8)           # high cost below ✗
+            )
+        elif direction == 'below':
+            penalty = torch.where(
+                y_flat > centroid_y,
+                1 / (w * (y_flat - centroid_y + 1e-8)),   # low cost below ✓
+                w * (centroid_y - y_flat + 1e-8)           # high cost above ✗
+            )
+        else:
+            penalty = torch.ones(height * width, device=attn.device)
+        
+        # Non-overlap: weight by reference object's attention at destination j
+        # attn[j] is high where reference object is → penalize sending mass there
+        attn_flat = attn.flatten()  # [256]
+        
+        # Combined cost C[i][j]:
+        # = dist(i→j)             → physical transport cost
+        # × penalty(j)            → directional penalty at destination
+        # × (1 + attn_flat(j))    → overlap penalty at destination
+        #
+        # penalty(j) unsqueeze(0) broadcasts across all source rows i
+        # attn_flat(j) unsqueeze(0) broadcasts across all source rows i
+        dist_matrix = dist_matrix / (dist_matrix.max() + 1e-8)   # → [0, 1]
+        penalty = penalty / (penalty.max() + 1e-8)                # → [0, 1]
+
+        # now cost values are in [0, ~2] which is reasonable for reg=0.1
+        cost_matrix = dist_matrix * penalty.unsqueeze(0) * (1 + attn_flat.unsqueeze(0))
+        
+        return cost_matrix
     
     
     def sinkhorn(self, a, b, cost_matrix, reg=0.1, num_iters=100):
