@@ -32,6 +32,7 @@ def load_model(config: RunConfig):
 
     StormPipeline = load_pipeline_from_config(config)
     stable = StormPipeline.from_pretrained(stable_diffusion_version).to(device)
+    stable.use_distance = False
     return stable
 
 def get_indices_to_alter(stable, prompt: str) -> List[int]:
@@ -124,25 +125,49 @@ def run_on_prompt(prompt: List[str],
 @pyrallis.wrap()
 def main(config: RunConfig):
     stable = load_model(config)
-    prompt_list = ['a cake to the left of a suitcase']
     
-    for prompt in prompt_list:
-        token_indices = get_noun_indices_to_alter(stable, prompt)
-        print(token_indices)
-        for seed in config.seeds:
-            images = []
-            g = torch.Generator('cuda').manual_seed(seed)
-            controller = AttentionStore()
-            image = run_on_prompt(prompt=prompt,
-                                model=stable,
-                                controller=controller,
-                                token_indices=token_indices,
-                                seed=g,
-                                config=config)
-            prompt_output_path = config.output_path / f'{prompt}'
-            prompt_output_path.mkdir(exist_ok=True, parents=True)
-            image.save(prompt_output_path / f'{seed}.png')
-            images.append(image)
+    prompt_list = [
+        "a cake to the left of a suitcase",
+        "a bottle to the left of a suitcase",
+        "a dog to the left of a wine glass",
+        "an elephant to the left of a laptop",
+        "a spoon to the left of a teddy bear",
+        "a bottle to the right of a suitcase",
+        "an elephant to the right of a clock",
+        "a bicycle to the right of a bear",
+        "a train to the right of a vase",
+        "a car to the right of a traffic light",
+        "a horse above a cat",
+        "an orange above a cat",
+        "a refrigerator above a couch",
+        "a cat above a pillow",
+        "a suitcase above a car",
+        "a handbag below an umbrella",
+        "a skateboard below an apple",
+        "a giraffe below a sheep",
+        "a potted plant below a bench",
+        "a sports ball below a sandwich",
+    ]
 
+    for use_distance, model_name in [(False, 'og_storm'), (True, 'new_storm')]:
+        stable.use_distance = use_distance
+        print(f"\nGenerating for: {model_name}")
+        
+        for prompt in prompt_list:
+            token_indices = get_noun_indices_to_alter(stable, prompt)
+            print(f"Prompt: {prompt} | Tokens: {token_indices}")
+            
+            for seed in config.seeds:
+                g = torch.Generator('cuda').manual_seed(seed)
+                controller = AttentionStore()
+                image = run_on_prompt(prompt=prompt,
+                                    model=stable,
+                                    controller=controller,
+                                    token_indices=token_indices,
+                                    seed=g,
+                                    config=config)
+                prompt_output_path = config.output_path / model_name / f'{prompt}'
+                prompt_output_path.mkdir(exist_ok=True, parents=True)
+                image.save(prompt_output_path / f'{seed}.png')
 if __name__ == '__main__':
     main()
