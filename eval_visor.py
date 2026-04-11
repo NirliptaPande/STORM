@@ -61,7 +61,7 @@ EVAL_PROMPTS = [
     "a sports ball below a sandwich",
 ]
 
-SEEDS = [6143, 7792, 8892, 9010]
+SEEDS = [42]
 
 
 # ── Spatial relation parsing ────────────────────────────────────────────────────
@@ -293,7 +293,7 @@ def compare_models(image_root: str, model_names: list, seeds: list, prompts: lis
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_root", type=str, default="outputs",
+    parser.add_argument("--image_root", type=str, default="output",
                         help="Root folder containing model subfolders")
     parser.add_argument("--models", nargs="+", default=["og_storm", "new_storm"],
                         help="Model folder names to evaluate (space separated)")
