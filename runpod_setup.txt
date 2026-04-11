@@ -52,5 +52,9 @@ pip install git+https://github.com/openai/CLIP.git@main
 pip install ipykernel
 python -m ipykernel install --user --name=storm --display-name "storm"
 
+#git config
+
+git config --global user.name "Nirlipta Pande"
+git config --global user.email "nirliptapande@gmail.com"
 # 9. Verify numpy and torch are compatible
 python -c "import numpy as np; import torch; t = torch.from_numpy(np.array([1,2,3])); print('numpy:', np.__version__, '| torch:', torch.__version__, '| OK:', t)"
