@@ -5,7 +5,7 @@ from typing import Dict, List
 
 @dataclass
 class RunConfig:
-    model_name: str = 'pipeline'
+    model_name: str = 'poisson_pipeline'
     # Guiding text prompt
     sd_2_1: bool = False
     # Which token indices to alter with attend-and-excite

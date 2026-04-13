@@ -340,18 +340,23 @@ class StormPipeline(StableDiffusionPipeline):
 
         # Expand to full OT cost matrix
         cost_matrix_flat = cost_matrix.flatten().unsqueeze(1).repeat(1, attn.numel())  # (256, 256)
-        if self.use_distance:
-            y_coords_grid, x_coords_grid = torch.meshgrid(
-                torch.arange(height, device=attn.device).float(),
-                torch.arange(width, device=attn.device).float(),
-                indexing='ij'
-            )
-            positions = torch.stack([x_coords_grid.flatten(), y_coords_grid.flatten()], dim=1)
-            dist_matrix = torch.cdist(positions, positions, p=2)
-            dist_matrix = dist_matrix / (dist_matrix.mean() + 1e-8)
-            cost_matrix_flat = cost_matrix_flat * dist_matrix
+
+        # Build pairwise distance matrix between all pixel positions
+        y_coords_grid, x_coords_grid = torch.meshgrid(
+            torch.arange(height, device=attn.device).float(),
+            torch.arange(width, device=attn.device).float(),
+            indexing='ij'
+        )
+        positions = torch.stack([x_coords_grid.flatten(), y_coords_grid.flatten()], dim=1)  # (256, 2)
+        dist_matrix = torch.cdist(positions, positions, p=2)  # (256, 256)
+        dist_matrix = dist_matrix / (dist_matrix.max() + 1e-8)  # normalize to [0, 1]
+
+        # Multiply: bad source pixels that travel far are most expensive
+        cost_matrix_flat = cost_matrix_flat * dist_matrix
 
         return cost_matrix_flat  
+ 
+    
     
     def sinkhorn(self, a, b, cost_matrix, reg=0.1, num_iters=100):
         """
