@@ -192,17 +192,18 @@ class StormPipeline(StableDiffusionPipeline):
         """
         N = H * W
         device = rhs.device
-        L    = self._build_laplacian_neumann(H, W, device)
-        ones = torch.ones(1, N, device=device)
-        A    = torch.cat([L, ones], dim=0)                  # (N+1, N)
-        b    = torch.cat([rhs, mass.unsqueeze(0)], dim=0)   # (N+1,)
+        with torch.no_grad():
+            L    = self._build_laplacian_neumann(H, W, device)
+            ones = torch.ones(1, N, device=device)
+            A    = torch.cat([L, ones], dim=0)                  # (N+1, N)
+            b    = torch.cat([rhs, mass.unsqueeze(0)], dim=0)   # (N+1,)
 
-        a_prime = torch.linalg.lstsq(A, b).solution         # (N,)
+            a_prime = torch.linalg.lstsq(A, b).solution         # (N,)
 
-        a_prime = a_prime.clamp(min=0)
-        s = a_prime.sum()
-        if s > 1e-8:
-            a_prime = a_prime * (mass / s)
+            a_prime = a_prime.clamp(min=0)
+            s = a_prime.sum()
+            if s > 1e-8:
+                a_prime = a_prime * (mass / s)
         return a_prime.reshape(H, W)
 
     # ------------------------------------------------------------------
@@ -289,16 +290,25 @@ class StormPipeline(StableDiffusionPipeline):
             cf_sub = self._compute_cost_field(obj_2d, 'obj', w=w, use_distance=use_distance)
             cf_obj = self._compute_cost_field(sub_2d, 'obj', w=w, use_distance=use_distance)
 
-        # 8. Poisson solve → target attention maps
-        target_sub = self._solve_poisson(
-            self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
-        target_obj = self._solve_poisson(
-            self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
+        # # 8. Poisson solve → target attention maps
+        # target_sub = self._solve_poisson(
+        #     self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
+        # target_obj = self._solve_poisson(
+        #     self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
 
-        # 9. Spatial loss
-        loss_sub = F.mse_loss(sub_2d, target_sub)
-        loss_obj = F.mse_loss(obj_2d, target_obj)
-
+        # # 9. Spatial loss
+        # loss_sub = F.mse_loss(sub_2d, target_sub) * 100
+        # loss_obj = F.mse_loss(obj_2d, target_obj) * 100
+        
+        # 8. Direct weighted loss — penalize attention in high-cost regions
+        loss_sub = (sub_2d * cf_sub).sum()
+        loss_obj = (obj_2d * cf_obj).sum()
+                
+        # print(f"sub_2d sum: {sub_2d.sum():.4f}, target_sub sum: {target_sub.sum():.4f}, "
+        #     f"target_sub max: {target_sub.max():.4f}, target_sub min: {target_sub.min():.4f}")
+        # print(f"obj_2d sum: {obj_2d.sum():.4f}, target_obj sum: {target_obj.sum():.4f}, "
+        #     f"target_obj max: {target_obj.max():.4f}, target_obj min: {target_obj.min():.4f}")   
+             
         # 10. Adjective loss
         loss_adj  = torch.tensor(0.0, device=device)
         adj_count = 0
@@ -501,11 +511,12 @@ class StormPipeline(StableDiffusionPipeline):
         device = self._execution_device
         do_cfg = guidance_scale > 1.0
 
-        text_inputs, prompt_embeds = self._encode_prompt(
+        prompt_embeds = self._encode_prompt(
             prompt, device, num_images_per_prompt, do_cfg,
             negative_prompt,
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds)
+        text_inputs = None
 
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
