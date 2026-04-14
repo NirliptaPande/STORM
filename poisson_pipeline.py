@@ -1,5 +1,6 @@
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -19,6 +20,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 
 from utils.gaussian_smoothing import GaussianSmoothing
 from utils.ptp_utils import AttentionStore, aggregate_attention
+from utils.vis_utils import visualize_cross_attention_maps
 
 logger = logging.get_logger(__name__)
 
@@ -165,7 +167,22 @@ class StormPipeline(StableDiffusionPipeline):
                 for j in nbrs:
                     L[i, j] = 1.0
         return L
-
+    
+    # ------------------------------------------------------------------
+    # Gaussian target  (used by loss option 8.2)
+    # ------------------------------------------------------------------   
+    @staticmethod
+    def _make_gaussian_target(H: int, W: int, cx: float, cy: float,
+                               sigma: float, device: torch.device) -> torch.Tensor:
+        """
+        Returns a (H, W) normalised Gaussian centred at (cx, cy).
+        cx, cy are in pixel coordinates (can be fractional).
+        """
+        xs = torch.arange(W, device=device).float()
+        ys = torch.arange(H, device=device).float()
+        yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+        g = torch.exp(-((xx - cx)**2 + (yy - cy)**2) / (2 * sigma**2))
+        return g / (g.sum() + 1e-8)
     # ------------------------------------------------------------------
     # Poisson RHS
     # ------------------------------------------------------------------
@@ -290,21 +307,38 @@ class StormPipeline(StableDiffusionPipeline):
             cf_sub = self._compute_cost_field(obj_2d, 'obj', w=w, use_distance=use_distance)
             cf_obj = self._compute_cost_field(sub_2d, 'obj', w=w, use_distance=use_distance)
 
-        # # 8. Poisson solve → target attention maps
+        # There are a bunch of options for the loss here — we found direct weighted loss to work best, but the Poisson-solve-based spatial loss is also interesting and worth exploring further in future work.
+        
+        # # 8.1 Poisson solve → target attention maps
         # target_sub = self._solve_poisson(
         #     self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
         # target_obj = self._solve_poisson(
         #     self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
 
-        # # 9. Spatial loss
+        # # 8.2 Gaussian target
+        # target_sub = self._make_gaussian_target(H, W, cx=(0 + cx_obj.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
+        # target_obj = self._make_gaussian_target(H, W, cx=(W + cx_sub.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
+        # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
+        # loss_obj = F.kl_div((obj_2d + 1e-8).log(), target_obj + 1e-8, reduction='sum')
+         
+
+        # # 9.1 Spatial MSE loss for 8.1 Poisson solution
         # loss_sub = F.mse_loss(sub_2d, target_sub) * 100
         # loss_obj = F.mse_loss(obj_2d, target_obj) * 100
         
-        # 8. Direct weighted loss — penalize attention in high-cost regions
+        # # 9.2 Direct L2 loss to a cost-weighted target
+        # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
+        # loss_obj = F.kl_div((obj_2d + 1e-8).log(), target_obj + 1e-8, reduction='sum')
+        
+        # # 9.3 Direct weighted loss — penalize attention in high-cost regions
         loss_sub = (sub_2d * cf_sub).sum()
         loss_obj = (obj_2d * cf_obj).sum()
-                
-        # print(f"sub_2d sum: {sub_2d.sum():.4f}, target_sub sum: {target_sub.sum():.4f}, "
+        
+        # # 9.4 Centroid baseline, no weights
+        # margin = 2.0
+        # loss_sub = F.relu(cx_sub - cx_obj + margin)
+        # loss_obj = F.relu(cx_sub - cx_obj + margin)
+            # print(f"sub_2d sum: {sub_2d.sum():.4f}, target_sub sum: {target_sub.sum():.4f}, "
         #     f"target_sub max: {target_sub.max():.4f}, target_sub min: {target_sub.min():.4f}")
         # print(f"obj_2d sum: {obj_2d.sum():.4f}, target_obj sum: {target_obj.sum():.4f}, "
         #     f"target_obj max: {target_obj.max():.4f}, target_obj min: {target_obj.min():.4f}")   
@@ -490,6 +524,10 @@ class StormPipeline(StableDiffusionPipeline):
                  kernel_size: int = 3,
                  sd_2_1: bool = False,
                  use_distance: bool = False,
+                 attn_snapshot_steps: Optional[List[int]] = None,
+                 attn_snapshot_dir: Optional[str] = None,
+                 attn_snapshot_token_indices: Optional[List[int]] = None,
+                 display_attention_maps: bool = False,
                  ):
         if thresholds is None:
             thresholds = {0: 0.9, 5: 0.95, 10: 0.99, 15: 0.995, 20: 0.999}
@@ -537,6 +575,15 @@ class StormPipeline(StableDiffusionPipeline):
         # Use prompt_str for the spatial condition check (handles list prompts)
         prompt_str = prompt[0] if isinstance(prompt, list) else prompt
         spatial_condition = 0 if ("left" in prompt_str or "right" in prompt_str) else 1
+        snapshot_steps = set(attn_snapshot_steps or [])
+        saved_snapshot_steps = set()
+        default_token_indices = []
+        for group in indices_to_alter:
+            if isinstance(group, (list, tuple, set)):
+                default_token_indices.extend([idx for idx in group if idx is not None])
+            elif group is not None:
+                default_token_indices.append(group)
+        token_indices_for_viz = attn_snapshot_token_indices or default_token_indices
 
         # Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -562,6 +609,24 @@ class StormPipeline(StableDiffusionPipeline):
                         kernel_size=kernel_size,
                         normalize_eot=sd_2_1,
                         use_distance=use_distance)
+
+                    if i in snapshot_steps and i not in saved_snapshot_steps:
+                        save_path = None
+                        if attn_snapshot_dir:
+                            save_path = str(Path(attn_snapshot_dir) / f"step_{i:03d}.png")
+                        visualize_cross_attention_maps(
+                            prompt=prompt_str,
+                            attention_store=attention_store,
+                            tokenizer=self.tokenizer,
+                            res=attention_res,
+                            from_where=["up", "down", "mid"],
+                            select=0,
+                            token_indices=token_indices_for_viz,
+                            orig_image=None,
+                            save_path=save_path,
+                            display_image=display_attention_maps,
+                        )
+                        saved_snapshot_steps.add(i)
 
                     if not run_standard_sd and len(indices_to_alter[0]) == 2:
                         if (i in thresholds.keys()

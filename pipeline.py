@@ -1,5 +1,6 @@
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 
 from utils.gaussian_smoothing import GaussianSmoothing
 from utils.ptp_utils import AttentionStore, aggregate_attention
+from utils.vis_utils import visualize_cross_attention_maps
 
 
 logger = logging.get_logger(__name__)
@@ -681,6 +683,10 @@ class StormPipeline(StableDiffusionPipeline):
             sigma: float = 0.5,
             kernel_size: int = 3,
             sd_2_1: bool = False,
+                attn_snapshot_steps: Optional[List[int]] = None,
+                attn_snapshot_dir: Optional[str] = None,
+                attn_snapshot_token_indices: Optional[List[int]] = None,
+                display_attention_maps: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -807,6 +813,16 @@ class StormPipeline(StableDiffusionPipeline):
             max_iter_to_alter = len(self.scheduler.timesteps) + 1
             
         spatial_condition = 0 if "left" in prompt or "right" in prompt else 1 
+        prompt_str = prompt[0] if isinstance(prompt, list) else prompt
+        snapshot_steps = set(attn_snapshot_steps or [])
+        saved_snapshot_steps = set()
+        default_token_indices = []
+        for group in indices_to_alter:
+            if isinstance(group, (list, tuple, set)):
+                default_token_indices.extend([idx for idx in group if idx is not None])
+            elif group is not None:
+                default_token_indices.append(group)
+        token_indices_for_viz = attn_snapshot_token_indices or default_token_indices
         
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -830,6 +846,24 @@ class StormPipeline(StableDiffusionPipeline):
                                 sigma=sigma,
                                 kernel_size=kernel_size,
                                 normalize_eot = sd_2_1)
+
+                    if i in snapshot_steps and i not in saved_snapshot_steps:
+                        save_path = None
+                        if attn_snapshot_dir:
+                            save_path = str(Path(attn_snapshot_dir) / f"step_{i:03d}.png")
+                        visualize_cross_attention_maps(
+                            prompt=prompt_str,
+                            attention_store=attention_store,
+                            tokenizer=self.tokenizer,
+                            res=attention_res,
+                            from_where=["up", "down", "mid"],
+                            select=0,
+                            token_indices=token_indices_for_viz,
+                            orig_image=None,
+                            save_path=save_path,
+                            display_image=display_attention_maps,
+                        )
+                        saved_snapshot_steps.add(i)
                     
                     if not run_standard_sd and len(indices_to_alter[0]) == 2:
                         if i in thresholds.keys() and loss > 1. - thresholds[i] and 0 < i < 25 and coordinate[spatial_condition] > 0:

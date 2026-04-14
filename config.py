@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -9,7 +9,7 @@ class RunConfig:
     # Guiding text prompt
     sd_2_1: bool = False
     # Which token indices to alter with attend-and-excite
-    token_indices: List[int] = None
+    token_indices: Optional[List[int]] = None
     # Which random seeds to use when generating
     seeds: List[int] = field(default_factory=lambda: [42])
     # Path to save all outputs to
@@ -38,6 +38,16 @@ class RunConfig:
     kernel_size: int = 3
     # Whether to save cross attention maps for the final results
     save_cross_attention_maps: bool = False
+    # Whether to save denoising-step attention snapshots
+    save_attn_snapshots: bool = False
+    # Denoising steps to snapshot, e.g. [0, 10, 17, 25, 35]
+    attn_snapshot_steps: List[int] = field(default_factory=lambda: [0, 10, 17, 25, 35])
+    # Optional base directory for attention snapshots; if None, uses output_path/attn_progress
+    attn_snapshot_base_dir: Optional[Path] = None
+    # Optional token indices for visualization; defaults to altered token indices when None
+    attn_snapshot_token_indices: Optional[List[int]] = None
+    # Show attention grids inline when running in notebook contexts
+    display_attention_maps: bool = False
 
     def __post_init__(self):
         self.output_path.mkdir(exist_ok=True, parents=True)

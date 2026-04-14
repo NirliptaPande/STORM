@@ -1,5 +1,5 @@
 import pprint
-from typing import List, Tuple
+from typing import List, Optional, Tuple, Union
 
 import pyrallis
 import torch
@@ -53,7 +53,7 @@ def unique_indices(indices: List[int]) -> List[int]:
         if next_val is None or current + 1 != next_val]
 
 
-def fill_adj_indices(noun_indices: List[int], adj_indices: List[int]) -> Tuple[List[int], List[int]]:
+def fill_adj_indices(noun_indices: List[int], adj_indices: List[int]) -> Tuple[List[int], List[Optional[int]]]:
     result_adj_indices: List[int | None] = [None] * len(noun_indices)
 
     if not adj_indices:
@@ -74,7 +74,7 @@ def fill_adj_indices(noun_indices: List[int], adj_indices: List[int]) -> Tuple[L
 
 
 
-def get_noun_indices_to_alter(stable, prompt: str):
+def get_noun_indices_to_alter(stable, prompt: str) -> Tuple[List[int], List[Optional[int]]]:
     tokens = stable.tokenizer(prompt)['input_ids']
     token_idx_to_word = {idx: stable.tokenizer.decode(t).strip() for idx, t in enumerate(tokens) if 0 < idx < len(tokens) - 1}
     pprint.pprint(token_idx_to_word)
@@ -95,10 +95,10 @@ def get_noun_indices_to_alter(stable, prompt: str):
     return token_noun_indices, token_adj_indices
             
 
-def run_on_prompt(prompt: List[str],
+def run_on_prompt(prompt: Union[str, List[str]],
                 model,
                 controller: AttentionStore,
-                token_indices: List[int],
+                token_indices: Union[List[List[Optional[int]]], Tuple[List[int], List[Optional[int]]]],
                 seed: torch.Generator,
                 config: RunConfig) -> Image.Image:
     if controller is not None:
@@ -118,7 +118,14 @@ def run_on_prompt(prompt: List[str],
                     smooth_attentions=config.smooth_attentions,
                     sigma=config.sigma,
                     kernel_size=config.kernel_size,
-                    sd_2_1=config.sd_2_1)
+                    sd_2_1=config.sd_2_1,
+                    use_distance=getattr(model, 'use_distance', False),
+                    attn_snapshot_steps=(config.attn_snapshot_steps if config.save_attn_snapshots else None),
+                    attn_snapshot_dir=(str(((config.attn_snapshot_base_dir or (config.output_path / 'attn_progress')) /
+                                           (prompt if isinstance(prompt, str) else prompt[0])))
+                                       if config.save_attn_snapshots else None),
+                    attn_snapshot_token_indices=config.attn_snapshot_token_indices,
+                    display_attention_maps=config.display_attention_maps)
     image = outputs.images[0]
     return image
     

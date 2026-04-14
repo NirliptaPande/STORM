@@ -16,6 +16,7 @@ python --version  # should say 3.10.x
 
 # 5. Install numpy and opencv pinned to compatible versions
 pip install "numpy>=1.26,<2.0" opencv-python==4.8.1.78
+pip install opencv-python-headless==4.10.0.84
 
 # 6. Install all other dependencies
 pip install \
