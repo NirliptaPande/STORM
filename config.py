@@ -37,13 +37,13 @@ class RunConfig:
     # Kernel size for the Gaussian smoothing
     kernel_size: int = 3
     # Whether to save cross attention maps for the final results
-    save_cross_attention_maps: bool = False
+    save_cross_attention_maps: bool = True
     # Whether to save denoising-step attention snapshots
-    save_attn_snapshots: bool = False
+    save_attn_snapshots: bool = True
     # Denoising steps to snapshot, e.g. [0, 10, 17, 25, 35]
-    attn_snapshot_steps: List[int] = field(default_factory=lambda: [0, 10, 17, 25, 35])
+    attn_snapshot_steps: List[int] = field(default_factory=lambda: [0, 10, 17, 25])
     # Optional base directory for attention snapshots; if None, uses output_path/attn_progress
-    attn_snapshot_base_dir: Optional[Path] = None
+    attn_snapshot_base_dir: Optional[Path] = Path('../output/attn_progress')
     # Optional token indices for visualization; defaults to altered token indices when None
     attn_snapshot_token_indices: Optional[List[int]] = None
     # Show attention grids inline when running in notebook contexts

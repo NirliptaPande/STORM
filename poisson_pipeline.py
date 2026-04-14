@@ -310,10 +310,10 @@ class StormPipeline(StableDiffusionPipeline):
         # There are a bunch of options for the loss here — we found direct weighted loss to work best, but the Poisson-solve-based spatial loss is also interesting and worth exploring further in future work.
         
         # # 8.1 Poisson solve → target attention maps
-        # target_sub = self._solve_poisson(
-        #     self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
-        # target_obj = self._solve_poisson(
-        #     self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
+        target_sub = self._solve_poisson(
+            self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
+        target_obj = self._solve_poisson(
+            self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
 
         # # 8.2 Gaussian target
         # target_sub = self._make_gaussian_target(H, W, cx=(0 + cx_obj.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
@@ -323,16 +323,16 @@ class StormPipeline(StableDiffusionPipeline):
          
 
         # # 9.1 Spatial MSE loss for 8.1 Poisson solution
-        # loss_sub = F.mse_loss(sub_2d, target_sub) * 100
-        # loss_obj = F.mse_loss(obj_2d, target_obj) * 100
+        loss_sub = F.mse_loss(sub_2d, target_sub) * 100
+        loss_obj = F.mse_loss(obj_2d, target_obj) * 100
         
         # # 9.2 Direct L2 loss to a cost-weighted target
         # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
         # loss_obj = F.kl_div((obj_2d + 1e-8).log(), target_obj + 1e-8, reduction='sum')
         
         # # 9.3 Direct weighted loss — penalize attention in high-cost regions
-        loss_sub = (sub_2d * cf_sub).sum()
-        loss_obj = (obj_2d * cf_obj).sum()
+        # loss_sub = (sub_2d * cf_sub).sum()
+        # loss_obj = (obj_2d * cf_obj).sum()
         
         # # 9.4 Centroid baseline, no weights
         # margin = 2.0
