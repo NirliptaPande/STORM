@@ -209,18 +209,18 @@ class StormPipeline(StableDiffusionPipeline):
         """
         N = H * W
         device = rhs.device
-        with torch.no_grad():
-            L    = self._build_laplacian_neumann(H, W, device)
-            ones = torch.ones(1, N, device=device)
-            A    = torch.cat([L, ones], dim=0)                  # (N+1, N)
-            b    = torch.cat([rhs, mass.unsqueeze(0)], dim=0)   # (N+1,)
+        # with torch.no_grad():
+        L    = self._build_laplacian_neumann(H, W, device)
+        ones = torch.ones(1, N, device=device)
+        A    = torch.cat([L, ones], dim=0)                  # (N+1, N)
+        b    = torch.cat([rhs, mass.unsqueeze(0)], dim=0)   # (N+1,)
 
-            a_prime = torch.linalg.lstsq(A, b).solution         # (N,)
+        a_prime = torch.linalg.lstsq(A, b).solution         # (N,)
 
-            a_prime = a_prime.clamp(min=0)
-            s = a_prime.sum()
-            if s > 1e-8:
-                a_prime = a_prime * (mass / s)
+        a_prime = a_prime.clamp(min=0)
+        s = a_prime.sum()
+        if s > 1e-8:
+            a_prime = a_prime * (mass / s)
         return a_prime.reshape(H, W)
 
     # ------------------------------------------------------------------
@@ -295,25 +295,49 @@ class StormPipeline(StableDiffusionPipeline):
 
         # 6. Time-varying weight
         w = self._exp_cost_weight(time_step)
+        
+        #TESTING:
+        # Gaussian targets
+        target_sub = self._make_gaussian_target(H, W,
+            cx=(0 + cx_obj.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+        target_obj = self._make_gaussian_target(H, W,
+            cx=(W + cx_sub.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+
+        # Poisson energy loss — no no_grad, gradients must flow
+        with torch.no_grad():
+            L = self._build_laplacian_neumann(H, W, device)  # constant, safe to no_grad
+
+        diff_sub = (target_sub - sub_2d).flatten()
+        diff_obj = (target_obj - obj_2d).flatten()
+
+        phi_sub = torch.linalg.lstsq(L, diff_sub).solution
+        phi_obj = torch.linalg.lstsq(L, diff_obj).solution
+
+        loss_sub = (phi_sub ** 2).sum() * 0.01  # scale down for stability
+        loss_obj = (phi_obj ** 2).sum() * 0.01  # scale down for stability
+
+        # diagnostic — remove after confirming
+        # print("phi_sub grad_fn:", phi_sub.grad_fn)
+        # print("loss_sub grad_fn:", loss_sub.grad_fn)
 
         # 7. Cost fields (cross-referenced, same logic as STORM)
-        if is_spatial:
-            cf_sub = self._compute_cost_field(obj_2d, 'above', w=w, use_distance=use_distance)
-            cf_obj = self._compute_cost_field(sub_2d, 'below', w=w, use_distance=use_distance)
-        elif is_horizontal:
-            cf_sub = self._compute_cost_field(obj_2d, 'left',  w=w, use_distance=use_distance)
-            cf_obj = self._compute_cost_field(sub_2d, 'right', w=w, use_distance=use_distance)
-        else:
-            cf_sub = self._compute_cost_field(obj_2d, 'obj', w=w, use_distance=use_distance)
-            cf_obj = self._compute_cost_field(sub_2d, 'obj', w=w, use_distance=use_distance)
+        # if is_spatial:
+        #     cf_sub = self._compute_cost_field(obj_2d, 'above', w=w, use_distance=use_distance)
+        #     cf_obj = self._compute_cost_field(sub_2d, 'below', w=w, use_distance=use_distance)
+        # elif is_horizontal:
+        #     cf_sub = self._compute_cost_field(obj_2d, 'left',  w=w, use_distance=use_distance)
+        #     cf_obj = self._compute_cost_field(sub_2d, 'right', w=w, use_distance=use_distance)
+        # else:
+        #     cf_sub = self._compute_cost_field(obj_2d, 'obj', w=w, use_distance=use_distance)
+        #     cf_obj = self._compute_cost_field(sub_2d, 'obj', w=w, use_distance=use_distance)
 
         # There are a bunch of options for the loss here — we found direct weighted loss to work best, but the Poisson-solve-based spatial loss is also interesting and worth exploring further in future work.
         
         # # 8.1 Poisson solve → target attention maps
-        target_sub = self._solve_poisson(
-            self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
-        target_obj = self._solve_poisson(
-            self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
+        # target_sub = self._solve_poisson(
+        #     self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
+        # target_obj = self._solve_poisson(
+        #     self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
 
         # # 8.2 Gaussian target
         # target_sub = self._make_gaussian_target(H, W, cx=(0 + cx_obj.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
@@ -323,8 +347,8 @@ class StormPipeline(StableDiffusionPipeline):
          
 
         # # 9.1 Spatial MSE loss for 8.1 Poisson solution
-        loss_sub = F.mse_loss(sub_2d, target_sub) * 100
-        loss_obj = F.mse_loss(obj_2d, target_obj) * 100
+        # loss_sub = F.mse_loss(sub_2d, target_sub) * 1000
+        # loss_obj = F.mse_loss(obj_2d, target_obj) * 1000
         
         # # 9.2 Direct L2 loss to a cost-weighted target
         # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
@@ -412,6 +436,8 @@ class StormPipeline(StableDiffusionPipeline):
         g_norm = torch.norm(grad)
         if g_norm > max_norm:
             grad = grad * (max_norm / g_norm)
+            
+        # print(f"grad norm: {torch.norm(grad):.6f}, step_size: {step_size:.4f}")
         return latents - step_size * grad
 
     # ------------------------------------------------------------------
