@@ -2,3 +2,5 @@ venv/
 utils/__pycache__/
 __pycache__/
 output/
+compare_output/
+notebooks/attention_vis

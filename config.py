@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+from utils.attention_utils import AttentionConfig
 
 
 @dataclass
@@ -11,7 +12,7 @@ class RunConfig:
     # Which token indices to alter with attend-and-excite
     token_indices: Optional[List[int]] = None
     # Which random seeds to use when generating
-    seeds: List[int] = field(default_factory=lambda: [42])
+    seeds: List[int] = field(default_factory=lambda: [42, 6143, 7792, 8892, 9010])
     # Path to save all outputs to
     output_path: Path = Path('./output')
     # Number of denoising steps
@@ -36,18 +37,16 @@ class RunConfig:
     sigma: float = 0.5
     # Kernel size for the Gaussian smoothing
     kernel_size: int = 3
-    # Whether to save cross attention maps for the final results
-    save_cross_attention_maps: bool = True
-    # Whether to save denoising-step attention snapshots
-    save_attn_snapshots: bool = True
-    # Denoising steps to snapshot, e.g. [0, 10, 17, 25, 35]
-    attn_snapshot_steps: List[int] = field(default_factory=lambda: [0, 10, 17, 25])
-    # Optional base directory for attention snapshots; if None, uses output_path/attn_progress
-    attn_snapshot_base_dir: Optional[Path] = Path('../output/attn_progress')
-    # Optional token indices for visualization; defaults to altered token indices when None
-    attn_snapshot_token_indices: Optional[List[int]] = None
-    # Show attention grids inline when running in notebook contexts
-    display_attention_maps: bool = False
+    # Attention visualization and storage configuration
+    attention_config: Optional[AttentionConfig] = None
 
     def __post_init__(self):
         self.output_path.mkdir(exist_ok=True, parents=True)
+        # Default attention config if not provided
+        if self.attention_config is None:
+            self.attention_config = AttentionConfig(
+                save=True,
+                save_steps=[0, 10, 17, 25],
+                save_dir=self.output_path / 'attn_progress',
+                display=False
+            )

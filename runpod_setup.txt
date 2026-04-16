@@ -1,24 +1,7 @@
-# Start a pod with 2.1 torch and 11.8 cuda 
-# 1. Clone the repo
-git clone https://github.com/google/STORM.git
-cd STORM
-
-# 2. Create venv with Python 3.10
 python3.10 -m venv --system-site-packages venv
 source venv/bin/activate
-
-# 3. Confirm correct python
-which python
-python --version  # should say 3.10.x
-
-# 4. Install torch first, matched to CUDA 11.8
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# 5. Install numpy and opencv pinned to compatible versions
 pip install "numpy>=1.26,<2.0" opencv-python==4.8.1.78
 pip install opencv-python-headless==4.10.0.84
-
-# 6. Install all other dependencies
 pip install \
   albumentations \
   pudb \
@@ -44,18 +27,9 @@ pip install \
   pyrallis \
   accelerate \
   jupyter
-
-# 7. Install git-based dependencies
 pip install git+https://github.com/CompVis/taming-transformers.git@master
 pip install git+https://github.com/openai/CLIP.git@main
-
-# 8. Register venv as Jupyter kernel
 pip install ipykernel
 python -m ipykernel install --user --name=storm --display-name "storm"
-
-#git config
-
 git config --global user.name "Nirlipta Pande"
-git config --global user.email "nirliptapande@gmail.com"
-# 9. Verify numpy and torch are compatible
-python -c "import numpy as np; import torch; t = torch.from_numpy(np.array([1,2,3])); print('numpy:', np.__version__, '| torch:', torch.__version__, '| OK:', t)"
+git config --global user.email "nirliptapande@gmail.com

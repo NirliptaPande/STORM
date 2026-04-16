@@ -6,13 +6,12 @@ import torch
 from PIL import Image
 
 from config import RunConfig
-from utils import ptp_utils, vis_utils
+from utils import ptp_utils
 from utils.ptp_utils import AttentionStore
-import json
+from utils.attention_utils import AttentionConfig
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import spacy
-from typing import List
 import importlib
 from pathlib import Path
 
@@ -31,7 +30,13 @@ def load_model(config: RunConfig):
         stable_diffusion_version = "CompVis/stable-diffusion-v1-4"
 
     StormPipeline = load_pipeline_from_config(config)
-    stable = StormPipeline.from_pretrained(stable_diffusion_version).to(device)
+    if device.type == 'cuda':
+        stable = StormPipeline.from_pretrained(
+            stable_diffusion_version,
+            torch_dtype=torch.float16,
+        ).to(device)
+    else:
+        stable = StormPipeline.from_pretrained(stable_diffusion_version).to(device)
     stable.use_distance = False
     return stable
 
@@ -103,6 +108,24 @@ def run_on_prompt(prompt: Union[str, List[str]],
                 config: RunConfig) -> Image.Image:
     if controller is not None:
         ptp_utils.register_attention_control(model, controller)
+    
+    # Build attention config from RunConfig
+    prompt_for_save = prompt if isinstance(prompt, str) else prompt[0]
+    seed_for_save = seed.initial_seed() if hasattr(seed, "initial_seed") else None
+    save_dir = config.attention_config.save_dir
+    if save_dir is not None:
+        save_dir = save_dir / prompt_for_save
+        if seed_for_save is not None:
+            save_dir = save_dir / f"seed_{seed_for_save}"
+
+    attention_config = AttentionConfig(
+        save=config.attention_config.save,
+        save_steps=list(config.attention_config.save_steps),
+        save_dir=save_dir,
+        token_indices=config.attention_config.token_indices,
+        display=config.attention_config.display,
+    )
+    
     outputs = model(prompt=prompt,
                     attention_store=controller,
                     indices_to_alter=token_indices,
@@ -120,18 +143,38 @@ def run_on_prompt(prompt: Union[str, List[str]],
                     kernel_size=config.kernel_size,
                     sd_2_1=config.sd_2_1,
                     use_distance=getattr(model, 'use_distance', False),
-                    attn_snapshot_steps=(config.attn_snapshot_steps if config.save_attn_snapshots else None),
-                    attn_snapshot_dir=(str(((config.attn_snapshot_base_dir or (config.output_path / 'attn_progress')) /
-                                           (prompt if isinstance(prompt, str) else prompt[0])))
-                                       if config.save_attn_snapshots else None),
-                    attn_snapshot_token_indices=config.attn_snapshot_token_indices,
-                    display_attention_maps=config.display_attention_maps)
+                    attention_config=attention_config)
     image = outputs.images[0]
+    # Cleanup to prevent memory leaks
+    del outputs, attention_config
+    torch.cuda.empty_cache()
     return image
     
 @pyrallis.wrap()
 def main(config: RunConfig):
+    """
+    Main function to run STORM with configurable pipeline.
+    
+    Usage examples:
+    1. Run with default poisson_pipeline:
+       python run.py --model_name poisson_pipeline
+    
+    2. Run with standard pipeline:
+       python run.py --model_name pipeline
+    
+    3. Save attention maps at steps 0, 10, 20:
+       python run.py --model_name poisson_pipeline --attention_config.save true --attention_config.save_steps [0,10,20]
+    
+    4. Display attention maps inline:
+       python run.py --model_name pipeline --attention_config.display true
+    """
+    
+    # Load the model (pipeline or poisson_pipeline based on config.model_name)
     stable = load_model(config)
+    print(f"\n{'='*60}")
+    print(f"Running with model: {config.model_name}")
+    print(f"Attention config: save={config.attention_config.save}, steps={config.attention_config.save_steps}, display={config.attention_config.display}")
+    print(f"{'='*60}\n")
     
     prompt_list = [
         "a cake to the left of a suitcase",
@@ -156,25 +199,27 @@ def main(config: RunConfig):
         "a sports ball below a sandwich",
     ]
 
-    for use_distance, model_name in [(False, 'og_storm'), (True, 'new_storm')]:
-        stable.use_distance = use_distance
-        print(f"\nGenerating for: {model_name}")
+    for prompt in prompt_list:
+        token_indices = get_noun_indices_to_alter(stable, prompt)
+        print(f"Prompt: {prompt} | Tokens: {token_indices}")
         
-        for prompt in prompt_list:
-            token_indices = get_noun_indices_to_alter(stable, prompt)
-            print(f"Prompt: {prompt} | Tokens: {token_indices}")
+        for seed in config.seeds:
+            g = torch.Generator('cuda').manual_seed(seed)
+            controller = AttentionStore()
+            image = run_on_prompt(prompt=prompt,
+                                model=stable,
+                                controller=controller,
+                                token_indices=token_indices,
+                                seed=g,
+                                config=config)
             
-            for seed in config.seeds:
-                g = torch.Generator('cuda').manual_seed(seed)
-                controller = AttentionStore()
-                image = run_on_prompt(prompt=prompt,
-                                    model=stable,
-                                    controller=controller,
-                                    token_indices=token_indices,
-                                    seed=g,
-                                    config=config)
-                prompt_output_path = config.output_path / model_name / f'{prompt}'
-                prompt_output_path.mkdir(exist_ok=True, parents=True)
-                image.save(prompt_output_path / f'{seed}.png')
+            # Save image to output directory
+            # Layout: <output_path>/<model_name>/<prompt>/<seed>.png
+            # Compatible with eval_visor.py expectations
+            prompt_output_path = config.output_path / config.model_name / f'{prompt}'
+            prompt_output_path.mkdir(exist_ok=True, parents=True)
+            image.save(prompt_output_path / f'{seed}.png')
+            print(f"  Saved: {prompt_output_path / f'{seed}.png'}")
+
 if __name__ == '__main__':
     main()

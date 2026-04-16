@@ -22,6 +22,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 from utils.gaussian_smoothing import GaussianSmoothing
 from utils.ptp_utils import AttentionStore, aggregate_attention
 from utils.vis_utils import visualize_cross_attention_maps
+from utils.attention_utils import AttentionConfig, visualize_attention_store
 
 
 logger = logging.get_logger(__name__)
@@ -683,10 +684,8 @@ class StormPipeline(StableDiffusionPipeline):
             sigma: float = 0.5,
             kernel_size: int = 3,
             sd_2_1: bool = False,
-                attn_snapshot_steps: Optional[List[int]] = None,
-                attn_snapshot_dir: Optional[str] = None,
-                attn_snapshot_token_indices: Optional[List[int]] = None,
-                display_attention_maps: bool = False,
+            use_distance: bool = False,
+            attention_config: Optional[AttentionConfig] = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -814,15 +813,24 @@ class StormPipeline(StableDiffusionPipeline):
             
         spatial_condition = 0 if "left" in prompt or "right" in prompt else 1 
         prompt_str = prompt[0] if isinstance(prompt, list) else prompt
-        snapshot_steps = set(attn_snapshot_steps or [])
-        saved_snapshot_steps = set()
+        
+        # Default attention config if not provided
+        if attention_config is None:
+            attention_config = AttentionConfig()
+        
+        # Prepare token indices for visualization
         default_token_indices = []
         for group in indices_to_alter:
             if isinstance(group, (list, tuple, set)):
                 default_token_indices.extend([idx for idx in group if idx is not None])
             elif group is not None:
                 default_token_indices.append(group)
-        token_indices_for_viz = attn_snapshot_token_indices or default_token_indices
+        
+        if attention_config.token_indices is None:
+            attention_config.token_indices = default_token_indices
+        
+        snapshot_steps = attention_config.save_steps
+        saved_snapshot_steps = set()
         
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -848,20 +856,15 @@ class StormPipeline(StableDiffusionPipeline):
                                 normalize_eot = sd_2_1)
 
                     if i in snapshot_steps and i not in saved_snapshot_steps:
-                        save_path = None
-                        if attn_snapshot_dir:
-                            save_path = str(Path(attn_snapshot_dir) / f"step_{i:03d}.png")
-                        visualize_cross_attention_maps(
+                        save_path = attention_config.get_save_path(i)
+                        visualize_attention_store(
                             prompt=prompt_str,
                             attention_store=attention_store,
                             tokenizer=self.tokenizer,
-                            res=attention_res,
-                            from_where=["up", "down", "mid"],
-                            select=0,
-                            token_indices=token_indices_for_viz,
-                            orig_image=None,
+                            attention_res=attention_res,
+                            token_indices=attention_config.token_indices,
                             save_path=save_path,
-                            display_image=display_attention_maps,
+                            display=attention_config.display,
                         )
                         saved_snapshot_steps.add(i)
                     
