@@ -229,16 +229,16 @@ class StormPipeline(StableDiffusionPipeline):
     # ------------------------------------------------------------------
 
     def _poisson_loss(self,
-                      time_step: int,
-                      attention_maps: torch.Tensor,
-                      indices_to_alter_total: List[List[Optional[int]]],
-                      smooth_attentions: bool = False,
-                      sigma: float = 0.5,
-                      kernel_size: int = 3,
-                      normalize_eot: bool = False,
-                      use_distance: bool = False,
-                      centroid: Optional[List[int]] = None
-                      ) -> Tuple[torch.Tensor, List[float]]:
+                    time_step: int,
+                    attention_maps: torch.Tensor,
+                    indices_to_alter_total: List[List[Optional[int]]],
+                    smooth_attentions: bool = False,
+                    sigma: float = 0.5,
+                    kernel_size: int = 3,
+                    normalize_eot: bool = False,
+                    use_distance: bool = False,
+                    centroid: Optional[List[int]] = None
+                    ) -> Tuple[torch.Tensor, List[float]]:
 
         device = attention_maps.device
 
@@ -249,138 +249,115 @@ class StormPipeline(StableDiffusionPipeline):
         attention_for_text = F.softmax(attention_for_text * 100, dim=-1)
 
         shifted = [[idx - 1 if idx is not None else None for idx in sl]
-                   for sl in indices_to_alter_total]
+                for sl in indices_to_alter_total]
         subject_indices, adjective_indices = shifted
 
         # 2. Parse spatial condition
-        is_spatial      = any(w in prompt_str for w in ["top", "above", "below"])
-        is_horizontal   = any(w in prompt_str for w in ["left", "right"])
-
-        sub_idx, obj_idx = 0, 1
+        is_spatial    = any(w in prompt_str for w in ["top", "above", "below"])
+        is_horizontal = any(w in prompt_str for w in ["left", "right"])
 
         # 3. Extract attention maps
-        sub_attn = self._get_attention_maps_for_tokens(
-            attention_for_text, [subject_indices[sub_idx]])
-        obj_attn = self._get_attention_maps_for_tokens(
-            attention_for_text, [subject_indices[obj_idx]])
+        sub_attn = self._get_attention_maps_for_tokens(attention_for_text, [subject_indices[0]])
+        obj_attn = self._get_attention_maps_for_tokens(attention_for_text, [subject_indices[1]])
 
         if sub_attn is None or obj_attn is None:
             logger.warning("Sub/obj attention maps are None. Returning zero loss.")
             return torch.tensor(0.0, device=device), [0.0, 0.0]
 
-        sub_attn_adj = self._get_attention_maps_for_tokens(
-            attention_for_text, [adjective_indices[sub_idx]])
-        obj_attn_adj = self._get_attention_maps_for_tokens(
-            attention_for_text, [adjective_indices[obj_idx]])
+        sub_attn_adj = self._get_attention_maps_for_tokens(attention_for_text, [adjective_indices[0]])
+        obj_attn_adj = self._get_attention_maps_for_tokens(attention_for_text, [adjective_indices[1]])
 
         # 4. Smooth
         if smooth_attentions:
             sub_attn = self._apply_smoothing(sub_attn, kernel_size, sigma)
             obj_attn = self._apply_smoothing(obj_attn, kernel_size, sigma)
 
-        # 5. Reshape to 2-D, normalise
+        # 5. Reshape to 2D, normalise
         res    = attention_maps.shape[1]
         sub_2d = self._normalize_attention_map(sub_attn).reshape(res, res)
         obj_2d = self._normalize_attention_map(obj_attn).reshape(res, res)
         H, W   = sub_2d.shape
 
-        # Coordinate (same as STORM, used for threshold gating)
         cx_sub, cy_sub = self._compute_centroid_2d(sub_2d)
         cx_obj, cy_obj = self._compute_centroid_2d(obj_2d)
-        if is_horizontal:
-            coordinate = [(cx_obj - cx_sub).clamp(min=0).item() / 10,
-                          (cy_obj - cy_sub).clamp(min=0).item() / 10]
-        else:
-            coordinate = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
-                          (cy_sub - cy_obj).clamp(min=0).item() / 10]
 
-        # 6. Time-varying weight
+        # 6. Direction-aware targets, cost fields, and coordinate
         w = self._exp_cost_weight(time_step)
-        
-        #TESTING:
-        # Gaussian targets
-        target_sub = self._make_gaussian_target(H, W,
-            cx=(0 + cx_obj.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
-        target_obj = self._make_gaussian_target(H, W,
-            cx=(W + cx_sub.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
 
-        # Poisson energy loss — no no_grad, gradients must flow
+        if is_horizontal:
+            if "left" in prompt_str:
+                # sub should be LEFT of obj
+                coordinate  = [(cx_obj - cx_sub).clamp(min=0).item() / 10,
+                            (cy_obj - cy_sub).clamp(min=0).item() / 10]
+                target_sub  = self._make_gaussian_target(H, W,
+                                cx=(0 + cx_obj.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+                target_obj  = self._make_gaussian_target(H, W,
+                                cx=(W + cx_sub.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+                cf_sub      = self._compute_cost_field(obj_2d, 'left',  w=w)
+                cf_obj      = self._compute_cost_field(sub_2d, 'right', w=w)
+            else:  # "right"
+                # sub should be RIGHT of obj
+                coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
+                            (cy_sub - cy_obj).clamp(min=0).item() / 10]
+                target_sub  = self._make_gaussian_target(H, W,
+                                cx=(W + cx_obj.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+                target_obj  = self._make_gaussian_target(H, W,
+                                cx=(0 + cx_sub.item()) / 2, cy=H * 0.5, sigma=3.0, device=device)
+                cf_sub      = self._compute_cost_field(obj_2d, 'right', w=w)
+                cf_obj      = self._compute_cost_field(sub_2d, 'left',  w=w)
+
+        elif is_spatial:
+            if "above" in prompt_str or "top" in prompt_str:
+                # sub should be ABOVE obj — smaller y
+                coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
+                            (cy_obj - cy_sub).clamp(min=0).item() / 10]
+                target_sub  = self._make_gaussian_target(H, W,
+                                cx=W * 0.5, cy=(0 + cy_obj.item()) / 2, sigma=3.0, device=device)
+                target_obj  = self._make_gaussian_target(H, W,
+                                cx=W * 0.5, cy=(H + cy_sub.item()) / 2, sigma=3.0, device=device)
+                cf_sub      = self._compute_cost_field(obj_2d, 'above', w=w)
+                cf_obj      = self._compute_cost_field(sub_2d, 'below', w=w)
+            else:  # "below"
+                # sub should be BELOW obj — larger y
+                coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
+                            (cy_sub - cy_obj).clamp(min=0).item() / 10]
+                target_sub  = self._make_gaussian_target(H, W,
+                                cx=W * 0.5, cy=(H + cy_obj.item()) / 2, sigma=3.0, device=device)
+                target_obj  = self._make_gaussian_target(H, W,
+                                cx=W * 0.5, cy=(0 + cy_sub.item()) / 2, sigma=3.0, device=device)
+                cf_sub      = self._compute_cost_field(obj_2d, 'below', w=w)
+                cf_obj      = self._compute_cost_field(sub_2d, 'above', w=w)
+
+        else:
+            # Non-spatial fallback
+            coordinate = [0.0, 0.0]
+            target_sub = self._make_gaussian_target(H, W, cx=W * 0.25, cy=H * 0.5, sigma=3.0, device=device)
+            target_obj = self._make_gaussian_target(H, W, cx=W * 0.75, cy=H * 0.5, sigma=3.0, device=device)
+            cf_sub     = self._compute_cost_field(obj_2d, 'left',  w=w)
+            cf_obj     = self._compute_cost_field(sub_2d, 'right', w=w)
+
+        # 7. Poisson energy loss (H^-1 Sobolev distance to Gaussian target)
         with torch.no_grad():
-            L = self._build_laplacian_neumann(H, W, device)  # constant, safe to no_grad
+            L = self._build_laplacian_neumann(H, W, device)
 
         diff_sub = (target_sub - sub_2d).flatten()
         diff_obj = (target_obj - obj_2d).flatten()
 
         phi_sub = torch.linalg.lstsq(L, diff_sub).solution
         phi_obj = torch.linalg.lstsq(L, diff_obj).solution
-
-        loss_sub = (phi_sub ** 2).sum() * 0.01  # scale down for stability
-        loss_obj = (phi_obj ** 2).sum() * 0.01  # scale down for stability
-        # print(f"Poisson loss (sub): {loss_sub.item():.3f}, Poisson loss (obj): {loss_obj.item():3f}")
-        #Overlap penalty,push away from the other object
-        w = self._exp_cost_weight(time_step)
-        if is_horizontal:
-            cf_sub = self._compute_cost_field(obj_2d, 'left',  w=w)
-            cf_obj = self._compute_cost_field(sub_2d, 'right', w=w)
-        elif is_spatial:
-            cf_sub = self._compute_cost_field(obj_2d, 'above', w=w)
-            cf_obj = self._compute_cost_field(sub_2d, 'below', w=w)
         
+        # eps = 1e-4
+        # phi_sub = torch.linalg.solve(L, diff_sub)
+        # phi_obj = torch.linalg.solve(L, diff_obj)
+
+        loss_sub = (phi_sub ** 2).sum() * 0.01
+        loss_obj = (phi_obj ** 2).sum() * 0.01
+
+        # 8. Overlap penalty — directional push away from other object
         loss_sub += (sub_2d * cf_sub).sum() * 0.1
         loss_obj += (obj_2d * cf_obj).sum() * 0.1
-        # print(f"Cost Loss (sub): {(sub_2d * cf_sub).sum() * 0.1:.3f}, Cost loss (obj): {(obj_2d * cf_obj).sum() * 0.1:.3f}")
-        # diagnostic — remove after confirming
-        # print("phi_sub grad_fn:", phi_sub.grad_fn)
-        # print("loss_sub grad_fn:", loss_sub.grad_fn)
 
-        # 7. Cost fields (cross-referenced, same logic as STORM)
-        # if is_spatial:
-        #     cf_sub = self._compute_cost_field(obj_2d, 'above', w=w, use_distance=use_distance)
-        #     cf_obj = self._compute_cost_field(sub_2d, 'below', w=w, use_distance=use_distance)
-        # elif is_horizontal:
-        #     cf_sub = self._compute_cost_field(obj_2d, 'left',  w=w, use_distance=use_distance)
-        #     cf_obj = self._compute_cost_field(sub_2d, 'right', w=w, use_distance=use_distance)
-        # else:
-        #     cf_sub = self._compute_cost_field(obj_2d, 'obj', w=w, use_distance=use_distance)
-        #     cf_obj = self._compute_cost_field(sub_2d, 'obj', w=w, use_distance=use_distance)
-
-        # There are a bunch of options for the loss here — we found direct weighted loss to work best, but the Poisson-solve-based spatial loss is also interesting and worth exploring further in future work.
-        
-        # # 8.1 Poisson solve → target attention maps
-        # target_sub = self._solve_poisson(
-        #     self._cost_field_to_rhs(cf_sub), sub_2d.sum(), H, W)
-        # target_obj = self._solve_poisson(
-        #     self._cost_field_to_rhs(cf_obj), obj_2d.sum(), H, W)
-
-        # # 8.2 Gaussian target
-        # target_sub = self._make_gaussian_target(H, W, cx=(0 + cx_obj.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
-        # target_obj = self._make_gaussian_target(H, W, cx=(W + cx_sub.item()) / 2, cy=H*0.5, sigma=3.0, device=device)
-        # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
-        # loss_obj = F.kl_div((obj_2d + 1e-8).log(), target_obj + 1e-8, reduction='sum')
-         
-
-        # # 9.1 Spatial MSE loss for 8.1 Poisson solution
-        # loss_sub = F.mse_loss(sub_2d, target_sub) * 1000
-        # loss_obj = F.mse_loss(obj_2d, target_obj) * 1000
-        
-        # # 9.2 Direct L2 loss to a cost-weighted target
-        # loss_sub = F.kl_div((sub_2d + 1e-8).log(), target_sub + 1e-8, reduction='sum')
-        # loss_obj = F.kl_div((obj_2d + 1e-8).log(), target_obj + 1e-8, reduction='sum')
-        
-        # # 9.3 Direct weighted loss — penalize attention in high-cost regions
-        # loss_sub = (sub_2d * cf_sub).sum()
-        # loss_obj = (obj_2d * cf_obj).sum()
-        
-        # # 9.4 Centroid baseline, no weights
-        # margin = 2.0
-        # loss_sub = F.relu(cx_sub - cx_obj + margin)
-        # loss_obj = F.relu(cx_sub - cx_obj + margin)
-            # print(f"sub_2d sum: {sub_2d.sum():.4f}, target_sub sum: {target_sub.sum():.4f}, "
-        #     f"target_sub max: {target_sub.max():.4f}, target_sub min: {target_sub.min():.4f}")
-        # print(f"obj_2d sum: {obj_2d.sum():.4f}, target_obj sum: {target_obj.sum():.4f}, "
-        #     f"target_obj max: {target_obj.max():.4f}, target_obj min: {target_obj.min():.4f}")   
-             
-        # 10. Adjective loss
+        # 9. Adjective loss
         loss_adj  = torch.tensor(0.0, device=device)
         adj_count = 0
         if sub_attn_adj is not None:
@@ -400,7 +377,6 @@ class StormPipeline(StableDiffusionPipeline):
 
         loss = loss_sub + loss_obj + loss_adj
         return loss, coordinate
-
     # ------------------------------------------------------------------
     # Public wrapper  (identical signature to STORM's _compute_loss_from_ot)
     # ------------------------------------------------------------------
