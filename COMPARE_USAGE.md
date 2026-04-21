@@ -7,7 +7,10 @@ This file documents the **current** behavior of `compare.py`.
 `compare.py` runs in two phases:
 
 1. **Generation**
-     - Runs both models: `poisson_pipeline` and `pipeline`
+    - Runs three variants:
+      - `poisson_pipeline` (Poisson guidance)
+      - `pipeline` (guided pipeline)
+      - `basic_sd` (same `pipeline` backend with `run_standard_sd=True`)
      - Generates images for the VISOR prompt set (20 prompts)
      - Uses the requested seeds (default 5 seeds)
      - Optionally saves attention snapshots if `--save_attention` is passed
@@ -90,6 +93,11 @@ compare_output/
             42.png
             6143.png
             ...
+    basic_sd/
+        <prompt>/
+            42.png
+            6143.png
+            ...
 ```
 
 Evaluation JSON files:
@@ -98,6 +106,7 @@ Evaluation JSON files:
 compare_output/
     eval_poisson_pipeline.json
     eval_pipeline.json
+    eval_basic_sd.json
 ```
 
 Attention snapshots (only with `--save_attention`):
@@ -115,6 +124,14 @@ compare_output/
                 seed_6143/
                     ...
     pipeline/
+        attention/
+            <prompt>/
+                seed_42/
+                    step_000.png
+                    step_010.png
+                    step_017.png
+                    step_025.png
+    basic_sd/
         attention/
             <prompt>/
                 seed_42/

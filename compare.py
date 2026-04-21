@@ -26,7 +26,7 @@ Usage:
 
 import argparse
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 import torch
 from tqdm import tqdm
@@ -38,7 +38,23 @@ from utils.attention_utils import AttentionConfig
 from eval_visor import EVAL_PROMPTS, compare_models as eval_compare_models
 
 
-MODEL_NAMES = ['poisson_pipeline', 'pipeline']
+MODEL_VARIANTS: List[Dict[str, Any]] = [
+    {
+        'label': 'poisson_pipeline',
+        'model_name': 'poisson_pipeline',
+        'run_standard_sd': False,
+    },
+    {
+        'label': 'pipeline',
+        'model_name': 'pipeline',
+        'run_standard_sd': False,
+    },
+    {
+        'label': 'basic_sd',
+        'model_name': 'pipeline',
+        'run_standard_sd': True,
+    },
+]
 
 
 # ── Phase 1: Generation ────────────────────────────────────────────────────────
@@ -57,12 +73,16 @@ def generate_images(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for model_name in MODEL_NAMES:
+    for variant in MODEL_VARIANTS:
+        label = variant['label']
+        model_name = variant['model_name']
+        run_standard_sd = variant['run_standard_sd']
+
         print(f"\n{'='*70}")
-        print(f"  GENERATING: {model_name}")
+        print(f"  GENERATING: {label} (backend={model_name}, run_standard_sd={run_standard_sd})")
         print(f"{'='*70}")
 
-        model_output = output_dir / model_name
+        model_output = output_dir / label
 
         attn_config = AttentionConfig(
             save=save_attention,
@@ -75,12 +95,13 @@ def generate_images(
             model_name=model_name,
             seeds=seeds,
             output_path=model_output,
+            run_standard_sd=run_standard_sd,
             attention_config=attn_config,
         )
 
         model = load_model(config)
 
-        for prompt in tqdm(prompts, desc=f"Prompts ({model_name})"):
+        for prompt in tqdm(prompts, desc=f"Prompts ({label})"):
             token_indices = get_noun_indices_to_alter(model, prompt)
 
             for seed in seeds:
@@ -134,7 +155,7 @@ def evaluate(
     """
     eval_compare_models(
         image_root=str(output_dir),
-        model_names=MODEL_NAMES,
+        model_names=[variant['label'] for variant in MODEL_VARIANTS],
         seeds=seeds,
         prompts=prompts,
     )

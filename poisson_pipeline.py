@@ -337,26 +337,92 @@ class StormPipeline(StableDiffusionPipeline):
             cf_obj     = self._compute_cost_field(sub_2d, 'right', w=w)
 
         # 7. Poisson energy loss (H^-1 Sobolev distance to Gaussian target)
-        with torch.no_grad():
-            L = self._build_laplacian_neumann(H, W, device)
+        # with torch.no_grad():
+        #     L = self._build_laplacian_neumann(H, W, device)
 
-        diff_sub = (target_sub - sub_2d).flatten()
-        diff_obj = (target_obj - obj_2d).flatten()
+        # diff_sub = (target_sub - sub_2d).flatten()
+        # diff_obj = (target_obj - obj_2d).flatten()
 
-        phi_sub = torch.linalg.lstsq(L, diff_sub).solution
-        phi_obj = torch.linalg.lstsq(L, diff_obj).solution
+        # # phi_sub = torch.linalg.lstsq(L, diff_sub).solution
+        # # phi_obj = torch.linalg.lstsq(L, diff_obj).solution
         
         # eps = 1e-4
         # phi_sub = torch.linalg.solve(L, diff_sub)
         # phi_obj = torch.linalg.solve(L, diff_obj)
 
-        loss_sub = (phi_sub ** 2).sum() * 0.01
-        loss_obj = (phi_obj ** 2).sum() * 0.01
+        # loss_sub = (phi_sub ** 2).sum() * 0.01
+        # loss_obj = (phi_obj ** 2).sum() * 0.01
+
+        # # 8. Overlap penalty — directional push away from other object
+        # loss_sub += (sub_2d * cf_sub).sum() * 0.1
+        # loss_obj += (obj_2d * cf_obj).sum() * 0.1
+        
+        # # Printing loss components for debugging
+        # print(f"Poisson loss (sub):{(phi_sub ** 2).sum() * 0.01:.4f}, Poisson loss (obj): {(phi_obj ** 2).sum() * 0.01:.4f}, ")
+        # print(f"Cost Loss (sub): {(sub_2d * cf_sub).sum() * 0.1:.4f}, Cost Loss (obj): {(obj_2d * cf_obj).sum() * 0.1:.4f}")
+        
+        # Finite differences of attention maps — grad_fn preserved, flows back to latents
+        sub_gx = sub_2d[:, 1:] - sub_2d[:, :-1]   # (H, W-1)
+        sub_gy = sub_2d[1:, :] - sub_2d[:-1, :]   # (H-1, W)
+        obj_gx = obj_2d[:, 1:] - obj_2d[:, :-1]
+        obj_gy = obj_2d[1:, :] - obj_2d[:-1, :]
+
+        # Gradients of Gaussian targets — constant guidance field, no grad needed
+        with torch.no_grad():
+            tgt_sub_gx = target_sub[:, 1:] - target_sub[:, :-1]
+            tgt_sub_gy = target_sub[1:, :] - target_sub[:-1, :]
+            tgt_obj_gx = target_obj[:, 1:] - target_obj[:, :-1]
+            tgt_obj_gy = target_obj[1:, :] - target_obj[:-1, :]
+
+        # Match attention gradient field to target gradient field
+        loss_sub = (sub_gx - tgt_sub_gx).pow(2).mean() + (sub_gy - tgt_sub_gy).pow(2).mean()
+        loss_obj = (obj_gx - tgt_obj_gx).pow(2).mean() + (obj_gy - tgt_obj_gy).pow(2).mean()
+
+        # print(f"Poisson loss (sub): {loss_sub.item():.4f}, Poisson loss (obj): {loss_obj.item():.4f}")
+        
+        
+        # 7. Continuity equation loss
+        # Velocity field from cost field — constant, no grad needed
+        # with torch.no_grad():
+        #     # Average cost at each edge midpoint, then negate to get flow direction
+        #     # (high cost region = mass should flow away from there)
+        #     vx_sub = -(cf_sub[:, 1:] + cf_sub[:, :-1]) / 2   # (H, W-1)
+        #     vy_sub = -(cf_sub[1:, :] + cf_sub[:-1, :]) / 2   # (H-1, W)
+        #     vx_obj = -(cf_obj[:, 1:] + cf_obj[:, :-1]) / 2
+        #     vy_obj = -(cf_obj[1:, :] + cf_obj[:-1, :]) / 2
+
+        # # Flux = attention * velocity — grad_fn alive through sub_2d/obj_2d
+        # flux_x_sub = sub_2d[:, :-1] * vx_sub   # (H, W-1)
+        # flux_y_sub = sub_2d[:-1, :] * vy_sub   # (H-1, W)
+        # flux_x_obj = obj_2d[:, :-1] * vx_obj
+        # flux_y_obj = obj_2d[:-1, :] * vy_obj
+
+        # # Divergence of flux on the shared interior grid.
+        # # d/dx gives (H, W-2) and d/dy gives (H-2, W), so crop both to (H-2, W-2) before adding.
+        # div_x_sub = flux_x_sub[:, 1:] - flux_x_sub[:, :-1]
+        # div_y_sub = flux_y_sub[1:, :] - flux_y_sub[:-1, :]
+        # div_x_obj = flux_x_obj[:, 1:] - flux_x_obj[:, :-1]
+        # div_y_obj = flux_y_obj[1:, :] - flux_y_obj[:-1, :]
+
+        # div_sub = div_x_sub[1:-1, :] + div_y_sub[:, 1:-1]
+        # div_obj = div_x_obj[1:-1, :] + div_y_obj[:, 1:-1]
+
+        # # Penalize positive divergence — mass accumulating in wrong places
+        # loss_sub = div_sub.clamp(min=0).pow(2).mean()
+        # loss_obj = div_obj.clamp(min=0).pow(2).mean()
+
+        # print(f"Continuity loss (sub): {loss_sub.item():.6f}, Continuity loss (obj): {loss_obj.item():.6f}")
+
 
         # 8. Overlap penalty — directional push away from other object
-        loss_sub += (sub_2d * cf_sub).sum() * 0.1
-        loss_obj += (obj_2d * cf_obj).sum() * 0.1
+        cost_loss_sub = (sub_2d * cf_sub).sum() * 0.1
+        cost_loss_obj = (obj_2d * cf_obj).sum() * 0.1
 
+        # print(f"Cost loss (sub): {cost_loss_sub.item():.4f}, Cost loss (obj): {cost_loss_obj.item():.4f}")
+
+        loss_sub = loss_sub + cost_loss_sub
+        loss_obj = loss_obj + cost_loss_obj
+              
         # 9. Adjective loss
         loss_adj  = torch.tensor(0.0, device=device)
         adj_count = 0
