@@ -542,15 +542,15 @@ class StormPipeline(StableDiffusionPipeline):
                 sub_idx_in_list = 0
                 obj_idx_in_list = 1
             elif "right" in prompt_str: # e.g., "A on the right of B" -> A is subject[0], B is subject[1]
-                sub_idx_in_list = 0
-                obj_idx_in_list = 1
+                sub_idx_in_list = 1
+                obj_idx_in_list = 0
         elif is_directional_spatial:
             if "top" in prompt_str or "above" in prompt_str: # e.g., "A above B"
                 sub_idx_in_list = 0
                 obj_idx_in_list = 1
             elif "below" in prompt_str: # e.g., "A below B"
-                sub_idx_in_list = 0
-                obj_idx_in_list = 1
+                sub_idx_in_list = 1
+                obj_idx_in_list = 0
         # If non_spatial, default indices (0, 1) are used for sub/obj.
 
         # 3. Extract Subject and Object Attention Maps
