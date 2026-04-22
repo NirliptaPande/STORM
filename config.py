@@ -39,6 +39,8 @@ class RunConfig:
     kernel_size: int = 3
     # Attention visualization and storage configuration
     attention_config: Optional[AttentionConfig] = None
+    # Which model variants to run in compare.py. Allowed: ['sd', 'storm', 'poisson']
+    models_to_run: List[str] = field(default_factory=lambda: ['poisson'])
 
     def __post_init__(self):
         self.output_path.mkdir(exist_ok=True, parents=True)
