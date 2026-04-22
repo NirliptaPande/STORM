@@ -46,7 +46,7 @@ class RunConfig:
         if self.attention_config is None:
             self.attention_config = AttentionConfig(
                 save=True,
-                save_steps=[0, 10, 17, 25],
+                save_steps=[0, 10, 17, 25, 30, 37, 42, 49],
                 save_dir=self.output_path / 'attn_progress',
                 display=False
             )
