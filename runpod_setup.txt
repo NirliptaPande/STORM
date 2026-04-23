@@ -1,3 +1,5 @@
+apt-get update && apt-get install -y tmux
+tmux new-session -A -s mysession
 python3.10 -m venv --system-site-packages venv
 source venv/bin/activate
 pip install "numpy>=1.26,<2.0" opencv-python==4.8.1.78
@@ -31,5 +33,6 @@ pip install git+https://github.com/CompVis/taming-transformers.git@master
 pip install git+https://github.com/openai/CLIP.git@main
 pip install ipykernel
 python -m ipykernel install --user --name=storm --display-name "storm"
+python -m spacy download en_core_web_sm
 git config --global user.name "Nirlipta Pande"
-git config --global user.email "nirliptapande@gmail.com
+git config --global user.email "nirliptapande@gmail.com"

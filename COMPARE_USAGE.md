@@ -7,10 +7,11 @@ This file documents the **current** behavior of `compare.py`.
 `compare.py` runs in two phases:
 
 1. **Generation**
-    - Runs three variants:
-      - `poisson_pipeline` (Poisson guidance)
-      - `pipeline` (guided pipeline)
-      - `basic_sd` (same `pipeline` backend with `run_standard_sd=True`)
+        - Runs model variants selected in `RunConfig.models_to_run` from `config.py`
+        - Allowed model keys:
+            - `poisson` -> output folder `poisson_pipeline` (Poisson guidance)
+            - `storm` -> output folder `pipeline` (STORM guidance)
+            - `sd` -> output folder `basic_sd` (standard SD with `run_standard_sd=True`)
      - Generates images for the VISOR prompt set (20 prompts)
      - Uses the requested seeds (default 5 seeds)
      - Optionally saves attention snapshots if `--save_attention` is passed
@@ -34,6 +35,35 @@ uses:
 - **Seeds**: `42 6143 7792 8892 9010`
 - **Output dir**: `./compare_output`
 - **Attention snapshots**: **OFF** by default
+- **Models**: values from `RunConfig.models_to_run` in `config.py`
+
+## Choose which models run (config)
+
+Edit `config.py`:
+
+```python
+models_to_run: List[str] = field(default_factory=lambda: ['sd', 'storm', 'poisson'])
+```
+
+Examples:
+
+- Run only STORM and Poisson:
+
+```python
+models_to_run: List[str] = field(default_factory=lambda: ['storm', 'poisson'])
+```
+
+- Run only standard SD baseline:
+
+```python
+models_to_run: List[str] = field(default_factory=lambda: ['sd'])
+```
+
+You can also override from CLI without editing config:
+
+```bash
+python compare.py --models storm poisson
+```
 
 ## Save attention snapshots
 
@@ -107,6 +137,8 @@ compare_output/
     eval_poisson_pipeline.json
     eval_pipeline.json
     eval_basic_sd.json
+
+Only the selected models will be generated/evaluated.
 ```
 
 Attention snapshots (only with `--save_attention`):

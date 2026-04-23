@@ -40,21 +40,43 @@ from eval_visor import EVAL_PROMPTS, compare_models as eval_compare_models
 
 MODEL_VARIANTS: List[Dict[str, Any]] = [
     {
+        'key': 'poisson',
         'label': 'poisson_pipeline',
         'model_name': 'poisson_pipeline',
         'run_standard_sd': False,
     },
     {
+        'key': 'storm',
         'label': 'pipeline',
         'model_name': 'pipeline',
         'run_standard_sd': False,
     },
     {
+        'key': 'sd',
         'label': 'basic_sd',
         'model_name': 'pipeline',
         'run_standard_sd': True,
     },
 ]
+
+MODEL_VARIANTS_BY_KEY: Dict[str, Dict[str, Any]] = {
+    variant['key']: variant for variant in MODEL_VARIANTS
+}
+
+
+def resolve_model_variants(selected_models: List[str]) -> List[Dict[str, Any]]:
+    """Resolve user-selected model keys into compare.py variant configs."""
+    normalized = [model.strip().lower() for model in selected_models if model and model.strip()]
+    if not normalized:
+        raise ValueError("No models selected. Choose any of: sd, storm, poisson")
+
+    invalid = sorted({model for model in normalized if model not in MODEL_VARIANTS_BY_KEY})
+    if invalid:
+        allowed = ", ".join(MODEL_VARIANTS_BY_KEY.keys())
+        raise ValueError(f"Invalid model(s): {', '.join(invalid)}. Allowed values: {allowed}")
+
+    deduped_models = list(dict.fromkeys(normalized))
+    return [MODEL_VARIANTS_BY_KEY[model] for model in deduped_models]
 
 
 # ── Phase 1: Generation ────────────────────────────────────────────────────────
@@ -63,6 +85,7 @@ def generate_images(
     prompts: List[str],
     seeds: List[int],
     output_dir: Path,
+    model_variants: List[Dict[str, Any]],
     save_attention: bool = False,
 ):
     """
@@ -73,7 +96,7 @@ def generate_images(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for variant in MODEL_VARIANTS:
+    for variant in model_variants:
         label = variant['label']
         model_name = variant['model_name']
         run_standard_sd = variant['run_standard_sd']
@@ -148,6 +171,7 @@ def evaluate(
     prompts: List[str],
     seeds: List[int],
     output_dir: Path,
+    model_variants: List[Dict[str, Any]],
 ):
     """
     Evaluate generated images using eval_visor.py's OWL-ViT detection and
@@ -155,7 +179,7 @@ def evaluate(
     """
     eval_compare_models(
         image_root=str(output_dir),
-        model_names=[variant['label'] for variant in MODEL_VARIANTS],
+        model_names=[variant['label'] for variant in model_variants],
         seeds=seeds,
         prompts=prompts,
     )
@@ -164,6 +188,8 @@ def evaluate(
 # ── CLI ─────────────────────────────────────────────────────────────────────────
 
 def main():
+    default_config = RunConfig()
+
     parser = argparse.ArgumentParser(
         description="Generate with both pipelines and evaluate VISOR metrics."
     )
@@ -172,8 +198,12 @@ def main():
         help="Root directory for generated images and metrics."
     )
     parser.add_argument(
-        "--seeds", nargs="+", type=int, default=[42, 6143, 7792, 8892, 9010],
+        "--seeds", nargs="+", type=int, default=default_config.seeds,
         help="Seeds to use for generation (default: 5 seeds from config)."
+    )
+    parser.add_argument(
+        "--models", nargs="+", type=str, default=None,
+        help="Model keys to run (choose from: sd storm poisson). Defaults to config.models_to_run."
     )
     parser.add_argument(
         "--save_attention", action="store_true",
@@ -187,12 +217,17 @@ def main():
 
     output_dir = Path(args.output_dir)
     prompts = EVAL_PROMPTS  # reuse the canonical prompt list from eval_visor.py
+    selected_models = args.models if args.models is not None else default_config.models_to_run
+    model_variants = resolve_model_variants(selected_models)
+
+    print(f"Selected models: {[variant['key'] for variant in model_variants]}")
 
     if not args.eval_only:
         generate_images(
             prompts=prompts,
             seeds=args.seeds,
             output_dir=output_dir,
+            model_variants=model_variants,
             save_attention=args.save_attention,
         )
 
@@ -200,6 +235,7 @@ def main():
         prompts=prompts,
         seeds=args.seeds,
         output_dir=output_dir,
+        model_variants=model_variants,
     )
 
 

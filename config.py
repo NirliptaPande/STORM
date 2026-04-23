@@ -39,6 +39,8 @@ class RunConfig:
     kernel_size: int = 3
     # Attention visualization and storage configuration
     attention_config: Optional[AttentionConfig] = None
+    # Which model variants to run in compare.py. Allowed: ['sd', 'storm', 'poisson']
+    models_to_run: List[str] = field(default_factory=lambda: ['poisson'])
 
     def __post_init__(self):
         self.output_path.mkdir(exist_ok=True, parents=True)
@@ -46,7 +48,7 @@ class RunConfig:
         if self.attention_config is None:
             self.attention_config = AttentionConfig(
                 save=True,
-                save_steps=[0, 10, 17, 25],
+                save_steps=[0, 10, 17, 25, 30, 37, 42, 49],
                 save_dir=self.output_path / 'attn_progress',
                 display=False
             )
