@@ -103,13 +103,13 @@ class StormPipeline(StableDiffusionPipeline):
                 y < cy,
                 1 / (w * (cy - y + 1e-8)),
                 w * (y - cy + 1e-8)
-            ).transpose(0, 1)
+            )
         elif direction == 'below':
             cost_factor = torch.where(
                 y > cy,
                 1 / (w * (y - cy + 1e-8)),
                 w * (cy - y + 1e-8)
-            ).transpose(0, 1)
+            )
         else:
             cost_factor = torch.ones_like(attn)
 
