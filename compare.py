@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import time
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -96,6 +97,8 @@ def generate_images(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    timing_summary: Dict[str, Dict[str, float]] = {}  # label -> {total, per_prompt}
+
     for variant in model_variants:
         label = variant['label']
         model_name = variant['model_name']
@@ -124,8 +127,12 @@ def generate_images(
 
         model = load_model(config)
 
+        variant_start = time.perf_counter()
+        prompt_times: List[float] = []
+
         for prompt in tqdm(prompts, desc=f"Prompts ({label})"):
             token_indices = get_noun_indices_to_alter(model, prompt)
+            prompt_start = time.perf_counter()
 
             for seed in seeds:
                 g = torch.Generator('cuda').manual_seed(seed)
@@ -159,10 +166,26 @@ def generate_images(
                     del controller, g
                     torch.cuda.empty_cache()
 
+            prompt_times.append(time.perf_counter() - prompt_start)
+
+        variant_total = time.perf_counter() - variant_start
+        timing_summary[label] = {
+            'total': variant_total,
+            'per_prompt': sum(prompt_times) / len(prompt_times) if prompt_times else 0.0,
+        }
+
     del model
     torch.cuda.empty_cache()
 
     print(f"\nGeneration complete. Images saved under {output_dir}/")
+
+    # ── Timing summary ────────────────────────────────────────────────────────
+    print(f"\n{'─'*52}")
+    print(f"{'Model':<20} {'Total (s)':>12} {'Per-prompt (s)':>16}")
+    print(f"{'─'*52}")
+    for lbl, t in timing_summary.items():
+        print(f"{lbl:<20} {t['total']:>12.1f} {t['per_prompt']:>16.1f}")
+    print(f"{'─'*52}")
 
 
 # ── Phase 2: Evaluation ────────────────────────────────────────────────────────
