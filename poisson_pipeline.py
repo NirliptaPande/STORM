@@ -291,9 +291,9 @@ class StormPipeline(StableDiffusionPipeline):
                 coordinate  = [(cx_obj - cx_sub).clamp(min=0).item() / 10,
                             (cy_obj - cy_sub).clamp(min=0).item() / 10]
                 target_sub  = self._make_gaussian_target(H, W,
-                                cx=(0 + cx_obj.item()) / 2, cy=H * 0.5, sigma=sigma, device=device)
+                                cx=(0 + cx_obj.item()) / 2, cy=cy_sub.item(), sigma=sigma, device=device)
                 target_obj  = self._make_gaussian_target(H, W,
-                                cx=(W + cx_sub.item()) / 2, cy=H * 0.5, sigma=sigma, device=device)
+                                cx=(W + cx_sub.item()) / 2, cy=cy_obj.item(), sigma=sigma, device=device)
                 cf_sub      = self._compute_cost_field(obj_2d, 'left',  w=w)
                 cf_obj      = self._compute_cost_field(sub_2d, 'right', w=w)
             else:  # "right"
@@ -301,9 +301,9 @@ class StormPipeline(StableDiffusionPipeline):
                 coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
                             (cy_sub - cy_obj).clamp(min=0).item() / 10]
                 target_sub  = self._make_gaussian_target(H, W,
-                                cx=(W + cx_obj.item()) / 2, cy=H * 0.5, sigma=sigma, device=device)
+                                cx=(W + cx_obj.item()) / 2, cy=cy_sub.item(), sigma=sigma, device=device)
                 target_obj  = self._make_gaussian_target(H, W,
-                                cx=(0 + cx_sub.item()) / 2, cy=H * 0.5, sigma=sigma, device=device)
+                                cx=(0 + cx_sub.item()) / 2, cy=cy_obj.item(), sigma=sigma, device=device)
                 cf_sub      = self._compute_cost_field(obj_2d, 'right', w=w)
                 cf_obj      = self._compute_cost_field(sub_2d, 'left',  w=w)
 
@@ -313,9 +313,9 @@ class StormPipeline(StableDiffusionPipeline):
                 coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
                             (cy_obj - cy_sub).clamp(min=0).item() / 10]
                 target_sub  = self._make_gaussian_target(H, W,
-                                cx=W * 0.5, cy=(0 + cy_obj.item()) / 2, sigma=sigma, device=device)
+                                cx=cx_sub.item(), cy=(0 + cy_obj.item()) / 2, sigma=sigma, device=device)
                 target_obj  = self._make_gaussian_target(H, W,
-                                cx=W * 0.5, cy=(H + cy_sub.item()) / 2, sigma=sigma, device=device)
+                                cx=cx_obj.item(), cy=(H + cy_sub.item()) / 2, sigma=sigma, device=device)
                 cf_sub      = self._compute_cost_field(obj_2d, 'above', w=w)
                 cf_obj      = self._compute_cost_field(sub_2d, 'below', w=w)
             else:  # "below"
@@ -323,9 +323,9 @@ class StormPipeline(StableDiffusionPipeline):
                 coordinate  = [(cx_sub - cx_obj).clamp(min=0).item() / 10,
                             (cy_sub - cy_obj).clamp(min=0).item() / 10]
                 target_sub  = self._make_gaussian_target(H, W,
-                                cx=W * 0.5, cy=(H + cy_obj.item()) / 2, sigma=sigma, device=device)
+                                cx=cx_sub.item(), cy=(H + cy_obj.item()) / 2, sigma=sigma, device=device)
                 target_obj  = self._make_gaussian_target(H, W,
-                                cx=W * 0.5, cy=(0 + cy_sub.item()) / 2, sigma=sigma, device=device)
+                                cx=cx_obj.item(), cy=(0 + cy_sub.item()) / 2, sigma=sigma, device=device)
                 cf_sub      = self._compute_cost_field(obj_2d, 'below', w=w)
                 cf_obj      = self._compute_cost_field(sub_2d, 'above', w=w)
 
