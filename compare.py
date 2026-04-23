@@ -109,7 +109,7 @@ def generate_images(
 
         attn_config = AttentionConfig(
             save=save_attention,
-            save_steps=[0, 10, 17, 25],
+            save_steps=[0, 10, 17, 25, 30, 37, 42, 49],
             save_dir=(model_output / 'attention') if save_attention else None,
             display=False,
         )
@@ -207,7 +207,7 @@ def main():
     )
     parser.add_argument(
         "--save_attention", action="store_true",
-        help="Save attention maps at steps [0, 10, 17, 25]."
+        help="Save attention maps at steps [0, 10, 17, 25, 30, 37, 42, 49]."
     )
     parser.add_argument(
         "--eval_only", action="store_true",
