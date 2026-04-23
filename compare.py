@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import json
 import time
 from pathlib import Path
 from typing import List, Dict, Any
@@ -186,6 +187,11 @@ def generate_images(
     for lbl, t in timing_summary.items():
         print(f"{lbl:<20} {t['total']:>12.1f} {t['per_prompt']:>16.1f}")
     print(f"{'─'*52}")
+
+    timing_path = output_dir / "timing.json"
+    with open(timing_path, "w") as f:
+        json.dump(timing_summary, f, indent=2)
+    print(f"Timing saved to {timing_path}")
 
 
 # ── Phase 2: Evaluation ────────────────────────────────────────────────────────
